@@ -1,0 +1,9 @@
+{
+  "appId": "com.localexpense.tracker",
+  "appName": "Finxeity",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#0a0a0a"
+  }
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Finxeity</string>
+    <string name="title_activity_main">Finxeity</string>
+    <string name="package_name">com.localexpense.tracker</string>
+    <string name="custom_url_scheme">com.localexpense.tracker</string>
+</resources>

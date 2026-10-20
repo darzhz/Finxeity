@@ -1,0 +1,20 @@
+{
+  "packages": [
+    { "package": "com.google.android.apps.nbu.paisa.user", "name": "Google Pay", "category": "upi" },
+    { "package": "com.phonepe.app", "name": "PhonePe", "category": "upi" },
+    { "package": "net.one97.paytm", "name": "Paytm", "category": "wallet" },
+    { "package": "in.org.npci.upiapp", "name": "BHIM", "category": "upi" },
+    { "package": "com.dreamplug.androidapp", "name": "CRED", "category": "card" },
+    { "package": "com.amazon.mShop.android.shopping", "name": "Amazon", "category": "shopping" },
+    { "package": "com.sbi.lotusintouch", "name": "SBI YONO", "category": "bank" },
+    { "package": "com.icici.bank.imobile", "name": "ICICI Bank", "category": "bank" },
+    { "package": "com.hdfc.bank", "name": "HDFC Bank", "category": "bank" },
+    { "package": "com.hdfcbank.mobilebanking", "name": "HDFC Bank", "category": "bank" },
+    { "package": "com.axis.mobile", "name": "Axis Mobile", "category": "bank" },
+    { "package": "com.kotak.mahindra.mobilebanking", "name": "Kotak", "category": "bank" },
+    { "package": "com.msf.kbank.mobile", "name": "Kotak", "category": "bank" },
+    { "package": "com.csam.icici.bank.imobile", "name": "ICICI", "category": "bank" },
+    { "package": "com.samsung.android.spay", "name": "Samsung Wallet", "category": "wallet" },
+    { "package": "com.google.android.apps.walletnfcrel", "name": "Google Wallet", "category": "wallet" }
+  ]
+}

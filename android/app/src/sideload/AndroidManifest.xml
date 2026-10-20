@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      Sideload-only optional SMS backfill. This permission is omitted from the
+      play flavor because it is restricted by Google Play policy.
+    -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+</manifest>

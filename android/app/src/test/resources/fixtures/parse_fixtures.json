@@ -1,0 +1,394 @@
+{
+  "version": 1,
+  "note": "Redacted real-world notification shapes. Every parser change must keep these outputs true.",
+  "cases": [
+    {
+      "name": "phonepe - paid to a merchant",
+      "package": "com.phonepe.app",
+      "sender": null,
+      "title": "PhonePe",
+      "body": "Paid ₹450 to Swiggy",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 45000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": "Swiggy",
+        "accountDigits": null,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "google pay - paid to a merchant with a upi handle",
+      "package": "com.google.android.apps.nbu.paisa.user",
+      "sender": null,
+      "title": "Google Pay",
+      "body": "You paid ₹1,299 to reliance digital",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 129900,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": "Reliance digital",
+        "accountDigits": null,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "paytm - money debited from wallet",
+      "package": "net.one97.paytm",
+      "sender": null,
+      "title": "Paytm",
+      "body": "Rs.750 debited from Paytm Balance. Avl bal Rs.3,250.50",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 75000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": null,
+        "accountDigits": null,
+        "balanceMinor": 325050,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "hdfc bank - debit with account digits",
+      "package": "com.hdfc.bank",
+      "sender": null,
+      "title": "HDFC Bank",
+      "body": "Rs.1,200.00 debited from A/c XX4821",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 120000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": null,
+        "accountDigits": "4821",
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "icici bank - debit with a trailing balance",
+      "package": "com.icici.bank.imobile",
+      "sender": null,
+      "title": "ICICI Bank",
+      "body": "Rs.2,500.00 debited from A/c XX7788 towards BIG BAZAAR. Available balance Rs.15,430.00",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 250000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": "BIG BAZAAR",
+        "accountDigits": "7788",
+        "balanceMinor": 1543000,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "sbi sms - debit",
+      "package": "sms",
+      "sender": "VK-SBIINB",
+      "title": "VK-SBIINB",
+      "body": "Rs.500.00 debited from A/c XX1234 on 12-Aug-2025",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 50000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": null,
+        "accountDigits": "1234",
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "hdfc sms - credit",
+      "package": "sms",
+      "sender": "VK-HDFCBK",
+      "title": "VK-HDFCBK",
+      "body": "Rs.25,000.00 credited to A/c XX4821 on 12-Aug-2025",
+      "expected": {
+        "type": "CREDIT",
+        "amountMinor": 2500000,
+        "direction": "CREDIT",
+        "kind": "INCOME",
+        "merchant": null,
+        "accountDigits": "4821",
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "upi - paid to a virtual payment address",
+      "package": "in.org.npci.upiapp",
+      "sender": null,
+      "title": "BHIM",
+      "body": "Paid ₹320 to zomato@paytm",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 32000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": "Zomato",
+        "accountDigits": null,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "bank - otp is ignored",
+      "package": "sms",
+      "sender": "VK-HDFCBK",
+      "title": "VK-HDFCBK",
+      "body": "123456 is your OTP for the transaction of Rs.5,000 on your card ending 4821",
+      "expected": {
+        "type": "OTP",
+        "amountMinor": null,
+        "direction": null,
+        "kind": null,
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "offer - cashback is ignored",
+      "package": "com.phonepe.app",
+      "sender": null,
+      "title": "PhonePe",
+      "body": "Get Rs.100 cashback on your next UPI transaction. Limited period offer.",
+      "expected": {
+        "type": "PROMO",
+        "amountMinor": null,
+        "direction": null,
+        "kind": null,
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "bank - balance only",
+      "package": "com.hdfc.bank",
+      "sender": null,
+      "title": "HDFC Bank",
+      "body": "Available balance Rs.9,500.00",
+      "expected": {
+        "type": "BALANCE_ONLY",
+        "amountMinor": null,
+        "direction": null,
+        "kind": null,
+        "merchant": null,
+        "accountDigits": null,
+        "balanceMinor": 950000,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "unknown - a statement notice is ignored",
+      "package": "com.hdfc.bank",
+      "sender": null,
+      "title": "HDFC Bank",
+      "body": "Your monthly statement is ready to view",
+      "expected": {
+        "type": "OTHER",
+        "amountMinor": null,
+        "direction": null,
+        "kind": null,
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "bank - a bare amount waits for review",
+      "package": "com.hdfc.bank",
+      "sender": null,
+      "title": "HDFC Bank",
+      "body": "Rs.999",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 99900,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "federal bank - upi debit with merchant, reference and balance",
+      "package": "sms",
+      "sender": "FEBANK",
+      "title": "FEBANK",
+      "body": "Debited Rs 550.00 from a/c X6012 on 13Sep26 12:29 via UPI to SURESH R. Ref 625672273743.Bal Rs 5894.95. Not you?Call 18004251199 -Federal Bank",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 55000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": "SURESH R",
+        "accountDigits": "6012",
+        "balanceMinor": 589495,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "federal bank - upi mandate names the merchant after towards",
+      "package": "sms",
+      "sender": "FEBANK",
+      "title": "FEBANK",
+      "body": "Debited Rs 299.00 from a/c X6012 for UPI mandate towards JioHotstar on 08-10-2026 13:05:30. Ref: 185513207551. Not you? Call 18004201199 - Federal Bank",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 29900,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": "JioHotstar",
+        "accountDigits": "6012",
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "phonepe - a call to action is not a merchant",
+      "package": "com.phonepe.app",
+      "sender": null,
+      "title": "PhonePe",
+      "body": "You've paid Rs. 90 via PhonePe wallet. Not you? Call us on 022-68727374. Remaining balance: Rs.  144. To top-up click https://phone.pe/PHONPE/ws",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 9000,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "phonepe - a wallet top up is a transfer",
+      "package": "com.phonepe.app",
+      "sender": null,
+      "title": "PhonePe",
+      "body": "Rs 500 added to your PhonePe wallet",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 50000,
+        "direction": "DEBIT",
+        "kind": "TRANSFER",
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "hdfc - a credit card payment is a transfer",
+      "package": "sms",
+      "sender": "HDFCBK",
+      "title": "HDFCBK",
+      "body": "DEAR HDFCBANK CARDMEMBER, PAYMENT OF Rs. 2114.00 RECEIVED TOWARDS YOUR CREDIT CARD ENDING WITH 8565 ON 3-10-2026.YOUR AVAILABLE LIMIT IS RS. 27418.74",
+      "expected": {
+        "type": "CREDIT",
+        "amountMinor": 211400,
+        "direction": "DEBIT",
+        "kind": "TRANSFER",
+        "merchant": null,
+        "accountDigits": "8565",
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "hdfc - a loan offer is an advertisement",
+      "package": "sms",
+      "sender": "HDFCBK",
+      "title": "HDFCBK",
+      "body": "Act fast! Lock in the lowest loan rates with your HDFC Bank Credit Card. Get Rs. 10000 @1.28% p.m. Check EMI: https://1.hdfc.bank.in/HDFCBK/a/13z0inF",
+      "expected": {
+        "type": "PROMO",
+        "amountMinor": null,
+        "direction": null,
+        "kind": null,
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "hdfc - a pre approved business loan is an advertisement",
+      "package": "sms",
+      "sender": "HDFCBK",
+      "title": "HDFCBK",
+      "body": "Dear Darsh,\nGet quick cash with HDFC Bank Business Loan up to Rs.0.3L. Easy process, no paperwork.\nApply: https://1.hdfc.bank.in/HDFCBK/s/yo7oNGg6",
+      "expected": {
+        "type": "PROMO",
+        "amountMinor": null,
+        "direction": null,
+        "kind": null,
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "hdfc - a refund is a credit",
+      "package": "sms",
+      "sender": "HDFCBK",
+      "title": "HDFCBK",
+      "body": "Alert! Rs. 1320.82 refunded by CRED GARAGE BANGALORE IND on 22/SEP/2026 & adjusted against HDFC Bank Credit Card 8565",
+      "expected": {
+        "type": "CREDIT",
+        "amountMinor": 132082,
+        "direction": "CREDIT",
+        "kind": "REFUND",
+        "merchant": null,
+        "accountDigits": "8565",
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "airtel - a successful recharge is a bill",
+      "package": "sms",
+      "sender": "AIRTEL",
+      "title": "AIRTEL",
+      "body": "Recharge of INR 199.00 is successful for your Airtel Mobile on 01-10-2026 17:57",
+      "expected": {
+        "type": "SPEND",
+        "amountMinor": 19900,
+        "direction": "DEBIT",
+        "kind": "SPEND",
+        "merchant": "Airtel Mobile",
+        "accountDigits": null,
+        "autoCreate": true
+      }
+    },
+    {
+      "name": "airtel - a pack reminder is an advertisement",
+      "package": "sms",
+      "sender": "AIRTEL",
+      "title": "AIRTEL",
+      "body": "REMINDER: Airtel unlimited pack has expired on 7736XXX791 . Recharge now with Rs348 & get Unlimited calls",
+      "expected": {
+        "type": "PROMO",
+        "amountMinor": null,
+        "direction": null,
+        "kind": null,
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": false
+      }
+    },
+    {
+      "name": "a refund that was initiated is a credit",
+      "package": "sms",
+      "sender": "FLIPKART",
+      "title": "FLIPKART",
+      "body": "Refund of INR 800.00 with refund ID: 145449808 from EXPLORER SALES has been initiated.",
+      "expected": {
+        "type": "CREDIT",
+        "amountMinor": 80000,
+        "direction": "CREDIT",
+        "kind": "REFUND",
+        "merchant": null,
+        "accountDigits": null,
+        "autoCreate": true
+      }
+    }
+  ]
+}
