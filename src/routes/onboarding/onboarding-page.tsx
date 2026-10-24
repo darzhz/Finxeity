@@ -1,26 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ArrowLeft,
   ArrowRight,
+  Banknote,
   BatteryCharging,
   BellRing,
+  Check,
   CheckCircle2,
+  CreditCard,
+  Info,
+  Landmark,
+  Layers,
+  Lock,
   Plus,
+  Radar,
   RefreshCw,
-  ShieldCheck,
+  Repeat,
+  Sparkles,
+  Target,
+  Trash2,
   Wallet,
+  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppPicker } from '@/components/app-picker'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -30,34 +39,26 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Separator } from '@/components/ui/separator'
 import { LocalExpense } from '@/lib/plugin'
 import type { AccountType, Commitment, Goal, RecurringSummary } from '@/lib/plugin'
 import { formatMinor, parseMajorToMinor } from '@/lib/money'
 import { queryKeys } from '@/lib/query'
 
-const PROTOTYPE_STEPS = [
-  'privacy',
-  'access',
-  'accounts',
-  'categories',
-  'recurring',
-  'fixed',
-  'goals',
-  'ready',
-] as const
-type Step = (typeof PROTOTYPE_STEPS)[number]
+/* ------------------------------------------------------------------ */
+/* Steps                                                               */
+/* ------------------------------------------------------------------ */
 
-const STEP_TITLES = [
-  'Privacy & Vault',
-  'Access',
-  'Accounts & Balances',
-  'Spend Buckets',
-  'Recurring & Bills',
-  'Fixed Living Costs',
-  'Goals & Buffers',
-  'Review Ledger',
-]
+const STEPS = [
+  { id: 'privacy', title: 'Private by design', short: 'Privacy' },
+  { id: 'access', title: 'Let Finxeity listen', short: 'Access' },
+  { id: 'accounts', title: 'Where your money lives', short: 'Accounts' },
+  { id: 'categories', title: 'What counts as essential', short: 'Buckets' },
+  { id: 'recurring', title: 'Things that repeat', short: 'Recurring' },
+  { id: 'fixed', title: 'Fixed monthly costs', short: 'Fixed' },
+  { id: 'goals', title: 'Goals and buffer', short: 'Goals' },
+  { id: 'ready', title: 'Your calm number', short: 'Ready' },
+] as const
+type Step = (typeof STEPS)[number]['id']
 
 interface AccountDraft {
   key: string
@@ -67,13 +68,220 @@ interface AccountDraft {
   balanceInput: string
   type: AccountType
   sourceTexts?: string[]
+  detected?: boolean
 }
+
+const ACCOUNT_TYPES: { type: AccountType; label: string; icon: typeof Landmark }[] = [
+  { type: 'BANK', label: 'Bank', icon: Landmark },
+  { type: 'CARD', label: 'Card', icon: CreditCard },
+  { type: 'WALLET', label: 'Wallet', icon: Wallet },
+  { type: 'CASH', label: 'Cash', icon: Banknote },
+  { type: 'OTHER', label: 'Other', icon: Layers },
+]
+
+const QUICK_ACCOUNTS: { name: string; type: AccountType }[] = [
+  { name: 'HDFC Bank', type: 'BANK' },
+  { name: 'ICICI Bank', type: 'BANK' },
+  { name: 'SBI', type: 'BANK' },
+  { name: 'Axis Bank', type: 'BANK' },
+  { name: 'Kotak', type: 'BANK' },
+  { name: 'Cash in hand', type: 'CASH' },
+]
+
+const CONFETTI_COLORS = ['#818cf8', '#a78bfa', '#34d399', '#fbbf24', '#fb7185', '#38bdf8']
+
+function monthlyFactor(cadence: string): number {
+  switch (cadence.toUpperCase()) {
+    case 'WEEKLY':
+      return 52 / 12
+    case 'QUARTERLY':
+      return 1 / 3
+    case 'YEARLY':
+    case 'ANNUAL':
+      return 1 / 12
+    default:
+      return 1
+  }
+}
+
+function daysUntilIncome(incomeDay: number): number {
+  if (!incomeDay || incomeDay < 1 || incomeDay > 31) return 30
+  const now = new Date()
+  const thisMonth = new Date(now.getFullYear(), now.getMonth(), incomeDay)
+  const target =
+    thisMonth.getTime() > now.getTime() ? thisMonth : new Date(now.getFullYear(), now.getMonth() + 1, incomeDay)
+  return Math.max(1, Math.ceil((target.getTime() - now.getTime()) / 86_400_000))
+}
+
+/* ------------------------------------------------------------------ */
+/* Small building blocks                                               */
+/* ------------------------------------------------------------------ */
+
+function useCountUp(target: number, duration = 900) {
+  const [value, setValue] = useState(0)
+  useEffect(() => {
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reduce) {
+      setValue(target)
+      return
+    }
+    let raf = 0
+    const start = performance.now()
+    const from = 0
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setValue(Math.round(from + (target - from) * eased))
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, duration])
+  return value
+}
+
+function Ring({ pct, size = 52, stroke = 5 }: { pct: number; size?: number; stroke?: number }) {
+  const r = (size - stroke) / 2
+  const c = 2 * Math.PI * r
+  return (
+    <svg width={size} height={size} className="-rotate-90 shrink-0" aria-hidden>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} className="stroke-surface-raised" />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        strokeWidth={stroke}
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={c - (Math.min(100, pct) / 100) * c}
+        className="stroke-calm-indigo-light transition-[stroke-dashoffset] duration-700"
+      />
+    </svg>
+  )
+}
+
+function StepHeading({
+  icon: Icon,
+  title,
+  subtitle,
+  aside,
+}: {
+  icon: typeof Landmark
+  title: string
+  subtitle: string
+  aside?: ReactNode
+}) {
+  return (
+    <div className="flex items-start gap-3.5">
+      <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl border border-indigo-500/25 bg-gradient-to-br from-indigo-600/25 to-violet-500/10 text-calm-indigo-light shadow-sm shadow-indigo-500/10">
+        <Icon size={22} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="font-headline text-[24px] font-bold leading-tight tracking-tight text-text-primary">{title}</h1>
+          {aside}
+        </div>
+        <p className="mt-1 text-[14px] leading-relaxed text-text-secondary">{subtitle}</p>
+      </div>
+    </div>
+  )
+}
+
+function Panel({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={`rounded-2xl border border-border-subtle bg-surface-card p-4 ${className}`}>{children}</div>
+  )
+}
+
+function Field({
+  label,
+  prefix,
+  className = '',
+  ...props
+}: { label: string; prefix?: string } & React.ComponentProps<typeof Input>) {
+  return (
+    <div className={`space-y-1.5 ${className}`}>
+      <Label className="text-[12px] text-text-secondary">{label}</Label>
+      <div className="relative">
+        {prefix && (
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-text-muted">
+            {prefix}
+          </span>
+        )}
+        <Input {...props} className={`h-11 tabular-nums ${prefix ? 'pl-7' : ''}`} />
+      </div>
+    </div>
+  )
+}
+
+function StatusChip({ ok, okText, noText }: { ok: boolean; okText: string; noText: string }) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+        ok
+          ? 'border-calm-emerald/30 bg-calm-emerald/10 text-calm-emerald'
+          : 'border-border-subtle bg-surface-raised text-text-muted'
+      }`}
+    >
+      {ok ? <Check size={11} /> : <span className="size-1.5 rounded-full bg-text-muted" />}
+      {ok ? okText : noText}
+    </span>
+  )
+}
+
+function Confetti() {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 36 }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 0.6,
+        duration: 2.2 + Math.random() * 1.6,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        size: 6 + Math.random() * 6,
+        drift: (Math.random() - 0.5) * 120,
+        round: i % 3 === 0,
+      })),
+    [],
+  )
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden" aria-hidden>
+      {pieces.map((p) => (
+        <span
+          key={p.id}
+          className="fx-confetti absolute top-0 block"
+          style={
+            {
+              left: `${p.left}%`,
+              width: p.size,
+              height: p.round ? p.size : p.size * 0.5,
+              borderRadius: p.round ? 999 : 2,
+              background: p.color,
+              animationDelay: `${p.delay}s`,
+              animationDuration: `${p.duration}s`,
+              '--drift': `${p.drift}px`,
+            } as React.CSSProperties
+          }
+        />
+      ))}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                */
+/* ------------------------------------------------------------------ */
 
 export function OnboardingPage() {
   const navigate = useNavigate()
   const client = useQueryClient()
+  const scrollRef = useRef<HTMLDivElement>(null)
+
   const [stepIndex, setStepIndex] = useState(0)
-  const step: Step = PROTOTYPE_STEPS[stepIndex]
+  const [maxReached, setMaxReached] = useState(0)
+  const [direction, setDirection] = useState<'fwd' | 'back'>('fwd')
+  const step: Step = STEPS[stepIndex].id
 
   const [selectedApps, setSelectedApps] = useState<string[]>([])
   const [drafts, setDrafts] = useState<AccountDraft[]>([])
@@ -96,49 +304,28 @@ export function OnboardingPage() {
   const [savingsRate, setSavingsRate] = useState(20)
 
   const [infoDraftKey, setInfoDraftKey] = useState<string | null>(null)
-  const [detectedProposals, setDetectedProposals] = useState<
-    { packageName: string; name: string; type?: string; lastDigits: string; balanceMinor: number | null; sourceTexts?: string[] }[]
-  >([])
+  const [detectedCount, setDetectedCount] = useState<number | null>(null)
+  const [showConfetti, setShowConfetti] = useState(false)
+  const [finishing, setFinishing] = useState(false)
 
-  const accountsQuery = useQuery({
-    queryKey: queryKeys.accounts,
-    queryFn: () => LocalExpense.listAccounts(),
-  })
+  /* ---------------------------- queries ---------------------------- */
 
-  const categoriesQuery = useQuery({
-    queryKey: ['categories'],
-    queryFn: () => LocalExpense.listCategories(),
-  })
-
-  const recurringQuery = useQuery({
-    queryKey: queryKeys.recurring,
-    queryFn: () => LocalExpense.listRecurring(),
-  })
-
-  const commitmentsQuery = useQuery({
-    queryKey: ['commitments'],
-    queryFn: () => LocalExpense.listCommitments(),
-  })
-
-  const goalsQuery = useQuery({
-    queryKey: ['goals'],
-    queryFn: () => LocalExpense.listGoals(),
-  })
-
-  const financialQuery = useQuery({
-    queryKey: ['financialSettings'],
-    queryFn: () => LocalExpense.getFinancialSettings(),
-  })
-
-  const listenerQuery = useQuery({
-    queryKey: queryKeys.listener,
-    queryFn: () => LocalExpense.getListenerStatus(),
-  })
-
+  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: () => LocalExpense.listAccounts() })
+  const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: () => LocalExpense.listCategories() })
+  const recurringQuery = useQuery({ queryKey: queryKeys.recurring, queryFn: () => LocalExpense.listRecurring() })
+  const commitmentsQuery = useQuery({ queryKey: ['commitments'], queryFn: () => LocalExpense.listCommitments() })
+  const goalsQuery = useQuery({ queryKey: ['goals'], queryFn: () => LocalExpense.listGoals() })
+  const financialQuery = useQuery({ queryKey: ['financialSettings'], queryFn: () => LocalExpense.getFinancialSettings() })
+  const listenerQuery = useQuery({ queryKey: queryKeys.listener, queryFn: () => LocalExpense.getListenerStatus() })
   const batteryQuery = useQuery({
     queryKey: queryKeys.battery,
     queryFn: () => LocalExpense.isIgnoringBatteryOptimizations(),
   })
+
+  const refetchListener = listenerQuery.refetch
+  const refetchBattery = batteryQuery.refetch
+
+  /* ---------------------- seed local form state --------------------- */
 
   useEffect(() => {
     if (draftsInitialised.current || !accountsQuery.data) return
@@ -173,6 +360,35 @@ export function OnboardingPage() {
     )
   }, [categoriesQuery.data, financialQuery.data])
 
+  /* Re-check permissions while on the access step: when the user returns
+     from system settings, the status flips without a manual tap. */
+  useEffect(() => {
+    if (step !== 'access') return
+    const check = () => {
+      void refetchListener()
+      void refetchBattery()
+    }
+    const id = window.setInterval(check, 1500)
+    document.addEventListener('visibilitychange', check)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', check)
+    }
+  }, [step, refetchListener, refetchBattery])
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+  }, [stepIndex])
+
+  useEffect(() => {
+    if (step !== 'ready') return
+    setShowConfetti(true)
+    const id = window.setTimeout(() => setShowConfetti(false), 4200)
+    return () => window.clearTimeout(id)
+  }, [step])
+
+  /* --------------------------- mutations ---------------------------- */
+
   const saveApps = useMutation({
     mutationFn: (packages: string[]) => LocalExpense.setMonitoredApps({ packages }),
   })
@@ -187,63 +403,55 @@ export function OnboardingPage() {
       return LocalExpense.detectAccounts()
     },
     onSuccess: ({ proposals }) => {
-      if (proposals.length === 0) {
-        toast.info('No accounts detected in current notifications')
-        return
-      }
-      setDetectedProposals(proposals)
-      const first = proposals[0]
-      const nameInput = document.getElementById('acc-name-input') as HTMLInputElement | null
-      const typeInput = document.getElementById('acc-type-input') as HTMLSelectElement | null
-      const balInput = document.getElementById('acc-bal-input') as HTMLInputElement | null
-      if (nameInput) nameInput.value = first.name
-      if (typeInput) typeInput.value = 'Savings'
-      if (balInput && first.balanceMinor != null) balInput.value = (first.balanceMinor / 100).toString()
-      const merged = [...drafts]
-      for (const proposal of proposals) {
-        const exists = merged.some(
-          (draft) => draft.lastDigits === proposal.lastDigits && draft.name === proposal.name,
-        )
-        if (!exists) {
+      let added = 0
+      setDrafts((current) => {
+        const merged = [...current]
+        for (const proposal of proposals) {
+          const exists = merged.some(
+            (d) => d.lastDigits && d.lastDigits === proposal.lastDigits && d.name === proposal.name,
+          )
+          if (exists) continue
+          added += 1
+          const type: AccountType =
+            proposal.type === 'CARD' || proposal.type === 'CASH' || proposal.type === 'WALLET' || proposal.type === 'OTHER'
+              ? proposal.type
+              : 'BANK'
           merged.push({
             key: `proposal-${proposal.packageName}-${proposal.lastDigits}`,
             name: proposal.name,
             lastDigits: proposal.lastDigits,
-            balanceInput:
-              proposal.balanceMinor != null ? (proposal.balanceMinor / 100).toString() : '',
-            type: (proposal.type === 'CARD' ? 'CARD' : proposal.type === 'CASH' ? 'CASH' : proposal.type === 'WALLET' ? 'WALLET' : proposal.type === 'OTHER' ? 'OTHER' : 'BANK') as AccountType,
+            balanceInput: proposal.balanceMinor != null ? (proposal.balanceMinor / 100).toString() : '',
+            type,
             sourceTexts: proposal.sourceTexts,
+            detected: true,
           })
         }
-      }
-      setDrafts(merged)
+        return merged
+      })
+      setDetectedCount(proposals.length)
+      if (proposals.length === 0) toast.info('No accounts found in your recent alerts')
     },
+    onError: () => toast.error('Could not scan alerts. You can add accounts by hand.'),
   })
 
   const saveBalances = useMutation({
     mutationFn: async () => {
-      const valid = drafts.filter((draft) => draft.name.trim())
+      const valid = drafts.filter((d) => d.name.trim())
       for (const draft of valid) {
-        const balanceMinor = parseMajorToMinor(draft.balanceInput) ?? 0
         await LocalExpense.setAccountBalance({
           id: draft.id,
           name: draft.name.trim(),
           lastDigits: draft.lastDigits.trim() || null,
           type: draft.type,
-          balanceMinor,
+          balanceMinor: parseMajorToMinor(draft.balanceInput) ?? 0,
         })
       }
     },
-    onSuccess: async () => {
-      await client.invalidateQueries({ queryKey: queryKeys.accounts })
-      toast.success('Balances saved')
-    },
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.accounts }),
   })
 
   const saveCategories = useMutation({
-    mutationFn: () =>
-      LocalExpense.setFinancialSettings({ essentialCategories: Array.from(selectedCategories) }),
-    onSuccess: () => toast.success('Spend buckets saved'),
+    mutationFn: () => LocalExpense.setFinancialSettings({ essentialCategories: Array.from(selectedCategories) }),
   })
 
   const setStatus = useMutation({
@@ -258,7 +466,7 @@ export function OnboardingPage() {
   const addCommitment = useMutation({
     mutationFn: () =>
       LocalExpense.upsertCommitment({
-        name: commitmentName,
+        name: commitmentName.trim(),
         amountMinor: parseMajorToMinor(commitmentAmount) ?? 0,
         dueAt: commitmentDue ? new Date(commitmentDue).getTime() : Date.now(),
         recurrence: 'MONTHLY',
@@ -280,7 +488,7 @@ export function OnboardingPage() {
   const addGoal = useMutation({
     mutationFn: () =>
       LocalExpense.upsertGoal({
-        name: goalName,
+        name: goalName.trim(),
         targetMinor: parseMajorToMinor(goalTarget) ?? 0,
         savedMinor: parseMajorToMinor(goalSaved) ?? 0,
       }),
@@ -305,1028 +513,1091 @@ export function OnboardingPage() {
         incomeDay: Number(incomeDay) || 0,
         expectedIncomeMinor: parseMajorToMinor(expectedIncome) ?? 0,
       }),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['financialSettings'] })
-      toast.success('Saved')
-    },
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['financialSettings'] }),
   })
 
-  async function finish() {
-    await LocalExpense.setOnboardingComplete({ completed: true })
-    await client.invalidateQueries({ queryKey: queryKeys.onboarding })
-    navigate('/dashboard', { replace: true })
-  }
-
-  function next() {
-    setStepIndex((index) => Math.min(index + 1, PROTOTYPE_STEPS.length - 1))
-  }
-
-  function back() {
-    setStepIndex((index) => Math.max(index - 1, 0))
-  }
-
-  function goToStep(step: number) {
-    if (step < 1 || step > PROTOTYPE_STEPS.length) return
-    setStepIndex(step - 1)
-  }
-
-  const progress = ((stepIndex + 1) / PROTOTYPE_STEPS.length) * 100
+  /* --------------------------- derived data ------------------------- */
 
   const totalBalance = useMemo(
-    () => drafts.reduce((sum, draft) => sum + (parseMajorToMinor(draft.balanceInput) ?? 0), 0),
+    () => drafts.reduce((sum, d) => sum + (parseMajorToMinor(d.balanceInput) ?? 0), 0),
     [drafts],
   )
-
+  const namedDrafts = drafts.filter((d) => d.name.trim())
   const commitments = useMemo(() => commitmentsQuery.data?.commitments ?? [], [commitmentsQuery.data])
-  const fixedTotal = useMemo(
-    () => commitments.reduce((sum, c) => sum + c.amountMinor, 0),
-    [commitments],
-  )
-
+  const fixedTotal = useMemo(() => commitments.reduce((sum, c) => sum + c.amountMinor, 0), [commitments])
   const goals = goalsQuery.data?.goals ?? []
+  const recurring = useMemo(() => recurringQuery.data?.recurring ?? [], [recurringQuery.data])
+
+  const recurringMonthly = useMemo(
+    () => recurring.reduce((sum, p) => sum + p.amountMinor * monthlyFactor(String(p.cadence)), 0),
+    [recurring],
+  )
+  const confirmedRecurringMonthly = useMemo(
+    () =>
+      recurring
+        .filter((p) => p.confirmed)
+        .reduce((sum, p) => sum + p.amountMinor * monthlyFactor(String(p.cadence)), 0),
+    [recurring],
+  )
 
   const granted = listenerQuery.data?.accessGranted ?? false
   const ignoring = batteryQuery.data?.ignoring ?? false
 
+  /* The "calm daily number": what is left after the buffer, fixed costs,
+     confirmed recurring payments and savings, spread to the next payday. */
+  const calm = useMemo(() => {
+    const buffer = parseMajorToMinor(bufferInput) ?? 0
+    const income = parseMajorToMinor(expectedIncome) ?? 0
+    const saving = Math.round(income * (savingsRate / 100))
+    const days = daysUntilIncome(Number(incomeDay) || 0)
+    const spendable = totalBalance - buffer - fixedTotal - Math.round(confirmedRecurringMonthly) - saving
+    return { days, saving, spendable, perDay: Math.max(0, Math.round(spendable / days)) }
+  }, [bufferInput, expectedIncome, savingsRate, incomeDay, totalBalance, fixedTotal, confirmedRecurringMonthly])
+
+  const animatedPerDay = useCountUp(step === 'ready' ? calm.perDay : 0)
+  const animatedTotal = useCountUp(step === 'ready' ? totalBalance : 0)
+
+  /* ---------------------------- navigation -------------------------- */
+
+  const goTo = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= STEPS.length) return
+      setDirection(index >= stepIndex ? 'fwd' : 'back')
+      setStepIndex(index)
+      setMaxReached((m) => Math.max(m, index))
+    },
+    [stepIndex],
+  )
+  const next = () => goTo(stepIndex + 1)
+  const back = () => goTo(stepIndex - 1)
+
   function updateDraft(key: string, patch: Partial<AccountDraft>) {
-    setDrafts((current) => current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)))
+    setDrafts((current) => current.map((d) => (d.key === key ? { ...d, ...patch } : d)))
   }
 
+  function addQuickAccount(name: string, type: AccountType) {
+    setDrafts((current) =>
+      current.some((d) => d.name === name)
+        ? current
+        : [...current, { key: `quick-${name}`, name, lastDigits: '', balanceInput: '', type }],
+    )
+  }
+
+  async function finish() {
+    setFinishing(true)
+    try {
+      await LocalExpense.setOnboardingComplete({ completed: true })
+      await client.invalidateQueries({ queryKey: queryKeys.onboarding })
+      navigate('/dashboard', { replace: true })
+    } catch {
+      toast.error('Could not finish setup. Try again.')
+      setFinishing(false)
+    }
+  }
+
+  async function onPrimary() {
+    try {
+      switch (step) {
+        case 'accounts':
+          if (selectedApps.length > 0) await saveApps.mutateAsync(selectedApps)
+          await saveBalances.mutateAsync()
+          if (namedDrafts.length > 0) toast.success('Accounts saved')
+          break
+        case 'categories':
+          await saveCategories.mutateAsync()
+          break
+        case 'goals':
+          await saveFinancial.mutateAsync()
+          break
+        case 'ready':
+          await finish()
+          return
+      }
+      next()
+    } catch {
+      toast.error('Could not save. Check your entries and try again.')
+    }
+  }
+
+  const busy =
+    saveApps.isPending || saveBalances.isPending || saveCategories.isPending || saveFinancial.isPending || finishing
+
+  const primaryLabel: Record<Step, string> = {
+    privacy: 'Start setup',
+    access: granted ? 'Continue' : 'Continue without access',
+    accounts: namedDrafts.length === 0 ? 'Skip for now' : 'Save and continue',
+    categories: 'Save and continue',
+    recurring: 'Continue',
+    fixed: fixedTotal > 0 ? 'Continue' : 'Skip for now',
+    goals: 'Save and review',
+    ready: 'Open my dashboard',
+  }
+
+  const availableCategories = (categoriesQuery.data?.categories ?? []).filter((c) => c.kind === 'EXPENSE')
+  const infoDraft = drafts.find((d) => d.key === infoDraftKey)
+
+  /* ------------------------------------------------------------------ */
+  /* Render                                                              */
+  /* ------------------------------------------------------------------ */
+
   return (
-    <div className="flex h-dvh flex-col bg-surface-canvas text-text-primary">
-      <header className="w-full px-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600/30 to-violet-500/20 border border-indigo-500/20 flex items-center justify-center text-primary shadow-sm shadow-indigo-500/10">
-            <ShieldCheck className="text-calm-indigo-light" size={20} />
+    <div className="relative flex h-dvh flex-col bg-surface-canvas text-text-primary">
+      <style>{`
+        @keyframes fx-step-fwd { from { opacity: 0; transform: translateX(28px) } to { opacity: 1; transform: none } }
+        @keyframes fx-step-back { from { opacity: 0; transform: translateX(-28px) } to { opacity: 1; transform: none } }
+        @keyframes fx-spin { to { transform: rotate(360deg) } }
+        @keyframes fx-spin-rev { to { transform: rotate(-360deg) } }
+        @keyframes fx-breathe { 0%,100% { transform: scale(1); opacity: .55 } 50% { transform: scale(1.08); opacity: 1 } }
+        @keyframes fx-confetti {
+          0% { transform: translate3d(0,-20px,0) rotate(0); opacity: 1 }
+          100% { transform: translate3d(var(--drift),105vh,0) rotate(720deg); opacity: .9 }
+        }
+        @keyframes fx-pop { 0% { transform: scale(.6); opacity: 0 } 70% { transform: scale(1.08) } 100% { transform: scale(1); opacity: 1 } }
+        .fx-step-fwd { animation: fx-step-fwd .32s cubic-bezier(.2,.8,.2,1) both }
+        .fx-step-back { animation: fx-step-back .32s cubic-bezier(.2,.8,.2,1) both }
+        .fx-orbit-a { animation: fx-spin 26s linear infinite }
+        .fx-orbit-b { animation: fx-spin-rev 38s linear infinite }
+        .fx-orbit-c { animation: fx-spin 60s linear infinite }
+        .fx-breathe { animation: fx-breathe 3.6s ease-in-out infinite }
+        .fx-confetti { animation-name: fx-confetti; animation-timing-function: cubic-bezier(.3,.6,.4,1); animation-fill-mode: both }
+        .fx-pop { animation: fx-pop .4s cubic-bezier(.2,.9,.3,1.2) both }
+        @media (prefers-reduced-motion: reduce) {
+          .fx-step-fwd,.fx-step-back,.fx-orbit-a,.fx-orbit-b,.fx-orbit-c,.fx-breathe,.fx-confetti,.fx-pop { animation: none !important }
+        }
+      `}</style>
+
+      {showConfetti && <Confetti />}
+
+      {/* ------------------------------ header ------------------------------ */}
+      <header className="shrink-0 px-5 pt-[calc(1rem+env(safe-area-inset-top))] pb-3">
+        <div className="mx-auto flex w-full max-w-md items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="flex size-9 items-center justify-center rounded-xl border border-indigo-500/25 bg-gradient-to-tr from-indigo-600/35 to-violet-500/20 text-calm-indigo-light">
+              <Lock size={17} />
+            </div>
+            <div className="min-w-0 leading-none">
+              <div className="font-headline text-[18px] font-bold tracking-tight">Finxeity</div>
+              <div className="mt-1 truncate text-[11px] text-text-muted">Calm, private money clarity</div>
+            </div>
           </div>
-          <div className="flex flex-col">
-            <span className="font-headline text-[19px] tracking-tight text-text-primary font-bold leading-none">Finxeity</span>
-            <span className="text-[11px] font-sans text-text-muted mt-1 leading-none tracking-wide">Calm, private financial clarity</span>
+          <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-card px-2.5 py-1">
+            <span className="size-1.5 animate-pulse rounded-full bg-calm-emerald" />
+            <span className="whitespace-nowrap text-[11px] text-text-secondary">On-device</span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-card border border-border-subtle">
-          <span className="w-1.5 h-1.5 rounded-full bg-calm-emerald animate-pulse" />
-          <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary">On-Device</span>
-        </div>
+
+        {/* segmented progress: visited segments are tappable */}
+        <nav className="mx-auto mt-4 w-full max-w-md" aria-label="Setup progress">
+          <ol className="flex gap-1.5">
+            {STEPS.map((s, i) => {
+              const reachable = i <= maxReached
+              return (
+                <li key={s.id} className="flex-1">
+                  <button
+                    type="button"
+                    disabled={!reachable}
+                    onClick={() => goTo(i)}
+                    aria-label={`${s.short}${i === stepIndex ? ' (current)' : ''}`}
+                    aria-current={i === stepIndex ? 'step' : undefined}
+                    className="group block w-full py-1.5 disabled:cursor-default"
+                  >
+                    <span
+                      className={`block h-1.5 rounded-full transition-all duration-300 ${
+                        i === stepIndex
+                          ? 'bg-gradient-to-r from-calm-indigo to-calm-indigo-light shadow-[0_0_10px_rgba(129,140,248,.55)]'
+                          : i < stepIndex
+                            ? 'bg-calm-indigo/70 group-hover:bg-calm-indigo'
+                            : reachable
+                              ? 'bg-calm-indigo/35'
+                              : 'bg-surface-raised'
+                      }`}
+                    />
+                  </button>
+                </li>
+              )
+            })}
+          </ol>
+          <p className="mt-1 text-[12px] text-text-muted">
+            Step {stepIndex + 1} of {STEPS.length} · {STEPS[stepIndex].short}
+          </p>
+        </nav>
       </header>
 
-      <div className="w-full px-5 py-2.5 flex flex-col gap-2.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-mono tracking-wide text-text-muted uppercase" id="step-counter-text">
-            {stepIndex + 1} of {PROTOTYPE_STEPS.length} · {STEP_TITLES[stepIndex]}
-          </span>
-          <button
-            className="text-[12px] font-medium text-calm-indigo-light hover:text-white transition-colors py-0.5 px-1.5"
-            onClick={() => goToStep(PROTOTYPE_STEPS.length)}
-            type="button"
-          >
-            Skip to Ready
-          </button>
-        </div>
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar" id="step-nav-pills">
-          {PROTOTYPE_STEPS.map((_, index) => (
-            <button
-              key={index}
-              className={`step-pill px-3.5 py-1.5 rounded-full text-[12px] whitespace-nowrap transition-all duration-200 flex items-center gap-1.5 ${
-                index === stepIndex
-                  ? 'bg-calm-indigo text-white font-medium shadow-sm shadow-indigo-500/20'
-                  : 'bg-surface-card border border-border-subtle text-text-secondary hover:text-text-primary'
-              }`}
-              data-step-target={index + 1}
-              onClick={() => goToStep(index + 1)}
-              type="button"
-            >
-              <span>{index + 1}. {STEP_TITLES[index].split(' ')[0]}</span>
-            </button>
-          ))}
-        </div>
-        <div className="w-full h-1 bg-surface-raised rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-calm-indigo to-calm-indigo-light transition-all duration-300 rounded-full"
-            id="step-progress-bar"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-3 pb-6">
-        <div className="w-full max-w-md mx-auto flex flex-col gap-5">
+      {/* ------------------------------ content ------------------------------ */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 pt-2 pb-8">
+        <div
+          key={step}
+          className={`mx-auto flex w-full min-w-0 max-w-md flex-col gap-5 ${direction === 'fwd' ? 'fx-step-fwd' : 'fx-step-back'}`}
+        >
+          {/* ============================ PRIVACY ============================ */}
           {step === 'privacy' && (
-            <section className="flex flex-col gap-6" id="step-1">
-              <div className="relative w-full py-9 flex flex-col items-center justify-center overflow-hidden rounded-2xl bg-surface-card border border-border-subtle">
-                <div className="absolute -top-12 -left-12 w-44 h-44 bg-calm-indigo/15 rounded-full blur-3xl pointer-events-none" />
-                <div className="absolute -bottom-10 -right-10 w-44 h-44 bg-calm-violet/15 rounded-full blur-3xl pointer-events-none" />
-                <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-b from-surface-raised to-surface-card border border-indigo-500/25 flex items-center justify-center shadow-lg shadow-indigo-950/40">
-                  <ShieldCheck className="text-calm-indigo-light" size={38} />
+            <>
+              <div className="relative flex h-60 items-center justify-center overflow-hidden rounded-3xl border border-border-subtle bg-surface-card">
+                <div className="pointer-events-none absolute -left-10 -top-10 size-44 rounded-full bg-calm-indigo/20 blur-3xl" />
+                <div className="pointer-events-none absolute -bottom-12 -right-8 size-48 rounded-full bg-calm-violet/20 blur-3xl" />
+
+                <div className="fx-orbit-c absolute size-[220px] rounded-full border border-dashed border-indigo-400/20" />
+                <div className="fx-orbit-b absolute size-[160px] rounded-full border border-indigo-400/25">
+                  <span className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rounded-full bg-calm-violet shadow-[0_0_10px_#a78bfa]" />
                 </div>
-                <div className="mt-4 px-3.5 py-1 rounded-full bg-surface-raised/80 border border-border-subtle flex items-center gap-2">
-                  <ShieldCheck className="text-calm-indigo-light" size={15} />
-                  <span className="font-mono text-[11px] text-text-secondary tracking-wide">Zero Cloud Relays · AES-256 Vault</span>
+                <div className="fx-orbit-a absolute size-[110px] rounded-full border border-indigo-400/35">
+                  <span className="absolute -bottom-1 left-1/2 size-2 -translate-x-1/2 rounded-full bg-calm-emerald shadow-[0_0_10px_#34d399]" />
+                </div>
+                <div className="fx-breathe absolute size-[84px] rounded-full bg-calm-indigo/20 blur-xl" />
+                <div className="relative flex size-[72px] items-center justify-center rounded-2xl border border-indigo-400/30 bg-gradient-to-b from-surface-raised to-surface-card shadow-lg shadow-indigo-950/50">
+                  <Lock className="text-calm-indigo-light" size={32} />
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <h1 className="font-headline text-[26px] font-bold tracking-tight text-text-primary leading-tight">Peace of Mind for Your Money.</h1>
-                <p className="font-sans text-[14px] leading-relaxed text-text-secondary">
-                  Track every rupee naturally without anxiety, third-party trackers, or cloud leaks. Everything stays locked inside your device.
+              <div className="space-y-2">
+                <h1 className="font-headline text-[30px] font-bold leading-[1.1] tracking-tight">
+                  Your money stays on your phone.
+                </h1>
+                <p className="text-[15px] leading-relaxed text-text-secondary">
+                  Finxeity reads your bank alerts on this device and turns them into a daily number you can trust. No
+                  accounts to link, no cloud copy.
                 </p>
               </div>
 
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2.5">
                 {[
-                  { icon: ShieldCheck, title: '100% On-Device & Private', desc: 'Your numbers never touch remote servers. Pure offline security guaranteed at the OS layer.' },
-                  { icon: BellRing, title: 'Hardware-Grade Enclave', desc: 'Encryption keys live securely inside your device\'s biometric vault for stress-free storage.' },
-                  { icon: CheckCircle2, title: 'Zero Telemetry & Ad-Free', desc: 'No trackers, no financial nudges, and no cross-site profiling. Just serene clarity.' },
+                  {
+                    icon: Lock,
+                    title: 'Encrypted on-device vault',
+                    desc: 'Everything is stored locally with AES-256 and unlocked with your phone’s own security.',
+                  },
+                  {
+                    icon: BellRing,
+                    title: 'Reads only the apps you pick',
+                    desc: 'You choose which bank and payment apps Finxeity can see. You can change this any time.',
+                  },
+                  {
+                    icon: CheckCircle2,
+                    title: 'No ads, no trackers',
+                    desc: 'No telemetry and no profiling. Your numbers are never uploaded.',
+                  },
                 ].map((item) => (
-                  <div key={item.title} className="p-4 rounded-xl bg-surface-card border border-border-subtle flex items-start gap-3.5 transition-all hover:border-indigo-500/30">
-                    <div className="w-10 h-10 rounded-xl bg-surface-raised text-calm-indigo-light flex items-center justify-center shrink-0 border border-border-subtle">
-                      <item.icon size={20} />
+                  <div
+                    key={item.title}
+                    className="flex items-start gap-3.5 rounded-2xl border border-border-subtle bg-surface-card p-4"
+                  >
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-raised text-calm-indigo-light">
+                      <item.icon size={19} />
                     </div>
-                    <div className="flex flex-col">
-                      <h2 className="font-headline text-[15px] font-semibold text-text-primary">{item.title}</h2>
-                      <p className="font-sans text-[13px] text-text-muted mt-0.5 leading-normal">{item.desc}</p>
+                    <div>
+                      <h2 className="font-headline text-[15px] font-semibold">{item.title}</h2>
+                      <p className="mt-0.5 text-[13px] leading-normal text-text-muted">{item.desc}</p>
                     </div>
                   </div>
                 ))}
               </div>
-
-            </section>
+            </>
           )}
 
+          {/* ============================= ACCESS ============================= */}
           {step === 'access' && (
-            <section className="flex flex-col gap-5" id="step-2">
-              <div className="flex flex-col gap-1.5">
-                <h2 className="font-headline text-[24px] font-bold tracking-tight text-text-primary">Access</h2>
-                <p className="font-sans text-[14px] text-text-secondary">Grant the permissions Finxeity needs to read notifications and stay reliable.</p>
-              </div>
+            <>
+              <StepHeading
+                icon={BellRing}
+                title="Let Finxeity listen"
+                subtitle="Two quick permissions so it can read alerts and keep working in the background."
+              />
 
-              <Card className="shrink-0">
-                <CardHeader>
-                  <CardTitle className="text-base">Notification access</CardTitle>
-                  <CardDescription>Allow Finxeity to read the apps you choose.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {granted ? (
-                    <Alert>
-                      <CheckCircle2 className="size-4" />
-                      <AlertTitle>Access granted</AlertTitle>
-                      <AlertDescription>Listening for notifications now.</AlertDescription>
-                    </Alert>
-                  ) : (
-                    <Alert variant="destructive">
-                      <AlertTitle>Access not granted yet</AlertTitle>
-                      <AlertDescription>Open notification access, find Finxeity, and turn it on.</AlertDescription>
-                    </Alert>
-                  )}
-                  <Button className="h-11 w-full" onClick={() => LocalExpense.openNotificationSettings()}>
-                    Open notification access
-                  </Button>
-                  <Button variant="outline" className="h-11 w-full" onClick={() => void listenerQuery.refetch()} disabled={listenerQuery.isFetching}>
-                    <RefreshCw className="size-4" />
-                    Check again
-                  </Button>
-                </CardContent>
-              </Card>
+              <Panel className="space-y-3.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="font-headline text-[15px] font-semibold">Notification access</h2>
+                    <p className="mt-0.5 text-[13px] text-text-muted">Only the apps you choose later are read.</p>
+                  </div>
+                  <StatusChip ok={granted} okText="Granted" noText="Not yet" />
+                </div>
 
-              <Collapsible>
-                <Card>
-                  <CollapsibleTrigger className="w-full text-left">
-                    <CardHeader>
-                      <CardTitle className="text-base">Toggle greyed out? (Android 13+)</CardTitle>
-                      <CardDescription>Sideloaded apps need restricted settings unlocked first.</CardDescription>
-                    </CardHeader>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <CardContent className="space-y-2 text-sm text-muted-foreground">
-                      <ol className="list-decimal space-y-1 pl-5">
-                        <li>Open App info for Finxeity.</li>
-                        <li>Tap the ⋮ menu in the top-right corner.</li>
-                        <li>Choose “Allow restricted settings”.</li>
-                        <li>Return here and enable notification access.</li>
-                      </ol>
-                      <Button variant="link" className="h-auto px-0" onClick={() => LocalExpense.openAppDetailsSettings()}>
-                        Open App info
+                {granted ? (
+                  <Alert>
+                    <CheckCircle2 className="size-4" />
+                    <AlertTitle>You’re all set</AlertTitle>
+                    <AlertDescription>Finxeity is listening for new alerts.</AlertDescription>
+                  </Alert>
+                ) : (
+                  <>
+                    <p className="text-[13px] text-text-secondary">
+                      Open the settings page, find <strong>Finxeity</strong> and switch it on. This screen updates by
+                      itself when you come back.
+                    </p>
+                    <div className="grid grid-cols-[1fr_auto] gap-2.5">
+                      <Button className="h-11" onClick={() => LocalExpense.openNotificationSettings()}>
+                        Open notification access
                       </Button>
-                    </CardContent>
-                  </CollapsibleContent>
-                </Card>
-              </Collapsible>
+                      <Button
+                        variant="outline"
+                        className="h-11 w-11 px-0"
+                        aria-label="Check again"
+                        onClick={() => void refetchListener()}
+                        disabled={listenerQuery.isFetching}
+                      >
+                        <RefreshCw className={`size-4 ${listenerQuery.isFetching ? 'animate-spin' : ''}`} />
+                      </Button>
+                    </div>
+                  </>
+                )}
 
-              <Card className="shrink-0">
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <BatteryCharging className="size-4" />
-                    Keep tracking reliable
-                  </CardTitle>
-                  <CardDescription>Exempt Finxeity from battery optimization.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {ignoring ? (
-                    <Alert>
-                      <CheckCircle2 className="size-4" />
-                      <AlertTitle>Battery optimization is off</AlertTitle>
-                      <AlertDescription>Finxeity can keep listening.</AlertDescription>
-                    </Alert>
-                  ) : (
-                    <Button className="h-11 w-full" onClick={() => LocalExpense.requestIgnoreBatteryOptimizations()}>
-                      Exempt from battery optimization
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
+                {!granted && (
+                  <Collapsible>
+                    <CollapsibleTrigger className="w-full rounded-xl border border-border-subtle bg-surface-canvas px-3.5 py-2.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:text-text-primary">
+                      Toggle is greyed out? (Android 13 and above)
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <div className="space-y-2 px-1 pt-3 text-[13px] text-text-secondary">
+                        <ol className="list-decimal space-y-1 pl-5">
+                          <li>Open App info for Finxeity.</li>
+                          <li>Tap the ⋮ menu in the top-right corner.</li>
+                          <li>Choose “Allow restricted settings”.</li>
+                          <li>Come back and turn on notification access.</li>
+                        </ol>
+                        <Button variant="link" className="h-auto px-0" onClick={() => LocalExpense.openAppDetailsSettings()}>
+                          Open App info
+                        </Button>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+              </Panel>
 
-            </section>
+              <Panel className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <BatteryCharging className="mt-0.5 size-5 text-calm-indigo-light" />
+                    <div>
+                      <h2 className="font-headline text-[15px] font-semibold">Keep tracking reliable</h2>
+                      <p className="mt-0.5 text-[13px] text-text-muted">
+                        Stops Android from pausing Finxeity and missing alerts.
+                      </p>
+                    </div>
+                  </div>
+                  <StatusChip ok={ignoring} okText="Exempt" noText="Optional" />
+                </div>
+                {!ignoring && (
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full"
+                    onClick={() => LocalExpense.requestIgnoreBatteryOptimizations()}
+                  >
+                    Exempt from battery optimization
+                  </Button>
+                )}
+              </Panel>
+            </>
           )}
 
+          {/* ============================ ACCOUNTS ============================ */}
           {step === 'accounts' && (
-            <section className="flex flex-col gap-5" id="step-2">
-              <div className="flex flex-col gap-1.5">
-                <h2 className="font-headline text-[24px] font-bold tracking-tight text-text-primary">Add Your Balances</h2>
-                <p className="font-sans text-[14px] text-text-secondary">Establish an initial balance snapshot to see your calm net position effortlessly.</p>
-              </div>
+            <>
+              <StepHeading
+                icon={Landmark}
+                title="Where your money lives"
+                subtitle="Add what you hold today. This is your starting point, and it adjusts as alerts arrive."
+              />
 
-              <div className="p-4 rounded-2xl bg-surface-card border border-border-subtle flex flex-col gap-3.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <BellRing className="text-calm-indigo-light" size={22} />
-                    <span className="font-headline text-[15px] font-semibold text-text-primary">Smart SMS Detection</span>
-                  </div>
-                  <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full bg-surface-raised text-calm-indigo-light border border-border-subtle">OFFLINE ONLY</span>
+              <Panel className="relative space-y-3 overflow-hidden">
+                <div className="pointer-events-none absolute -right-8 -top-8 size-28 rounded-full bg-calm-indigo/15 blur-2xl" />
+                <div className="relative flex items-center gap-2.5">
+                  <Radar className="size-5 text-calm-indigo-light" />
+                  <h2 className="font-headline text-[15px] font-semibold">Find accounts from bank alerts</h2>
                 </div>
-                <p className="font-sans text-[13px] text-text-muted">Instantly read local bank transaction alerts to pre-fill balances without aggregators.</p>
-                <button
-                  className="w-full py-2.5 px-3 rounded-xl bg-surface-raised hover:bg-surface-high text-calm-indigo-light font-sans text-[13px] font-medium flex items-center justify-center gap-2 border border-border-subtle transition-colors"
-                  id="btn-detect-sms"
+                <p className="relative text-[13px] text-text-muted">
+                  Scans the last 90 days of alerts on this phone and pre-fills names and balances. Nothing leaves your
+                  device.
+                </p>
+                <Button
+                  className="relative h-11 w-full"
+                  variant="secondary"
                   onClick={() => detect.mutate()}
-                  type="button"
+                  disabled={detect.isPending}
                 >
-                  <Wallet size={18} id="sms-scan-icon" className={detect.isPending ? 'animate-spin' : ''} />
-                  <span id="sms-scan-label">{detect.isPending ? 'Scanning on-device alerts...' : 'Auto-Detect from Bank Alerts'}</span>
-                </button>
-                {detectedProposals.length > 0 && (
-                  <p className="text-[11px] text-text-muted">
-                    Detected {detectedProposals.length} account(s). Review and edit them below.
+                  <Sparkles className={`size-4 ${detect.isPending ? 'animate-pulse' : ''}`} />
+                  {detect.isPending ? 'Scanning alerts…' : detectedCount === null ? 'Scan my alerts' : 'Scan again'}
+                </Button>
+                {detectedCount !== null && detectedCount > 0 && (
+                  <p className="relative flex items-center gap-1.5 text-[12px] text-calm-emerald">
+                    <CheckCircle2 className="size-3.5" />
+                    Found {detectedCount} account{detectedCount === 1 ? '' : 's'}. Check the details below.
                   </p>
                 )}
-              </div>
+              </Panel>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-[11px] font-mono text-text-muted uppercase tracking-wider">Quick Presets</label>
+              <div className="space-y-2">
+                <p className="text-[13px] font-medium text-text-secondary">Add quickly</p>
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    { name: 'HDFC Bank', type: 'Savings', amount: '84200', color: 'bg-calm-indigo-light' },
-                    { name: 'ICICI Bank', type: 'Savings', amount: '46150', color: 'bg-calm-violet' },
-                    { name: 'SBI Account', type: 'Savings', amount: '22400', color: 'bg-tertiary' },
-                    { name: 'Cash In Hand', type: 'Cash', amount: '6000', color: 'bg-calm-emerald' },
-                  ].map((preset) => (
-                    <button
-                      key={preset.name}
-                      className="px-3 py-1.5 rounded-xl bg-surface-card border border-border-subtle hover:border-indigo-500/40 text-text-secondary hover:text-text-primary text-[12px] flex items-center gap-1.5 transition-colors"
-                      onClick={() => {
-                        setDrafts((current) => {
-                          const exists = current.some((d) => d.name === preset.name)
-                          if (exists) return current
-                          return [
-                            ...current,
-                            {
-                              key: `preset-${preset.name}`,
-                              name: preset.name,
-                              lastDigits: '',
-                              balanceInput: preset.amount,
-                              type: (preset.type === 'Credit Card'
-                                ? 'CARD'
-                                : preset.type === 'Cash'
-                                  ? 'CASH'
-                                  : preset.type === 'Brokerage'
-                                    ? 'OTHER'
-                                    : 'BANK') as AccountType,
-                            },
-                          ]
-                        })
-                      }}
-                      type="button"
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${preset.color}`} />
-                      {preset.name.split(' ')[0]}
-                    </button>
-                  ))}
+                  {QUICK_ACCOUNTS.map((q) => {
+                    const added = drafts.some((d) => d.name === q.name)
+                    return (
+                      <button
+                        key={q.name}
+                        type="button"
+                        disabled={added}
+                        onClick={() => addQuickAccount(q.name, q.type)}
+                        className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition-colors ${
+                          added
+                            ? 'border-calm-indigo/30 bg-calm-indigo/10 text-calm-indigo-light'
+                            : 'border-border-subtle bg-surface-card text-text-secondary hover:border-indigo-500/40 hover:text-text-primary'
+                        }`}
+                      >
+                        {added ? <Check size={12} /> : <Plus size={12} />}
+                        {q.name}
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
+
+              {drafts.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-border-subtle px-4 py-8 text-center">
+                  <Wallet className="mx-auto mb-2 size-7 text-text-muted" />
+                  <p className="text-[14px] font-medium text-text-secondary">No accounts yet</p>
+                  <p className="mt-1 text-[13px] text-text-muted">Scan your alerts or tap a bank above to begin.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {drafts.map((draft) => (
+                    <div
+                      key={draft.key}
+                      className="space-y-3.5 rounded-2xl border border-border-subtle bg-surface-card p-4"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-[13px] font-semibold text-text-secondary">
+                            {draft.name.trim() || 'New account'}
+                          </span>
+                          {draft.detected && (
+                            <span className="shrink-0 rounded-full border border-calm-emerald/30 bg-calm-emerald/10 px-2 py-0.5 text-[10px] text-calm-emerald">
+                              Detected
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-0.5">
+                          {draft.sourceTexts && draft.sourceTexts.length > 0 && (
+                            <button
+                              type="button"
+                              aria-label="Why was this detected?"
+                              className="rounded-full p-1.5 text-text-muted hover:bg-surface-raised hover:text-text-primary"
+                              onClick={() => setInfoDraftKey(draft.key)}
+                            >
+                              <Info size={16} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            aria-label="Remove account"
+                            className="rounded-full p-1.5 text-text-muted hover:bg-surface-raised hover:text-gentle-rose"
+                            onClick={() => setDrafts((c) => c.filter((d) => d.key !== draft.key))}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div
+                        role="radiogroup"
+                        aria-label="Account type"
+                        className="grid grid-cols-5 gap-1 rounded-xl border border-border-subtle bg-surface-canvas p-0.5"
+                      >
+                        {ACCOUNT_TYPES.map(({ type, label, icon: Icon }) => (
+                          <button
+                            key={type}
+                            type="button"
+                            role="radio"
+                            aria-checked={draft.type === type}
+                            onClick={() => updateDraft(draft.key, { type })}
+                            className={`flex h-9 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] transition-all ${
+                              draft.type === type
+                                ? 'bg-calm-indigo text-white shadow-sm'
+                                : 'text-text-muted hover:text-text-primary'
+                            }`}
+                          >
+                            <Icon size={14} />
+                            <span className="max-w-full truncate leading-none">{label}</span>
+                          </button>
+                        ))}
+                      </div>
+
+                      <Field
+                        label="Account name"
+                        value={draft.name}
+                        placeholder="HDFC Savings"
+                        onChange={(e) => updateDraft(draft.key, { name: e.target.value })}
+                      />
+                      <div className="flex gap-3">
+                        <Field
+                          className="flex-1"
+                          label="Last 4 digits"
+                          inputMode="numeric"
+                          maxLength={4}
+                          value={draft.lastDigits}
+                          placeholder="4821"
+                          onChange={(e) =>
+                            updateDraft(draft.key, { lastDigits: e.target.value.replace(/\D/g, '').slice(0, 4) })
+                          }
+                        />
+                        <Field
+                          className="flex-[2]"
+                          label="Balance now"
+                          prefix="₹"
+                          inputMode="decimal"
+                          value={draft.balanceInput}
+                          placeholder="0.00"
+                          onChange={(e) => updateDraft(draft.key, { balanceInput: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="flex items-center justify-between rounded-2xl border border-indigo-500/20 bg-gradient-to-r from-indigo-600/10 to-violet-500/5 px-4 py-3">
+                    <span className="text-[13px] text-text-secondary">
+                      Total across {drafts.length} account{drafts.length === 1 ? '' : 's'}
+                    </span>
+                    <span className="font-headline text-[18px] font-bold tabular-nums">{formatMinor(totalBalance)}</span>
+                  </div>
+                </div>
+              )}
 
               <Button
                 variant="outline"
                 className="h-11 w-full"
                 onClick={() =>
-                  setDrafts((current) => [
-                    ...current,
+                  setDrafts((c) => [
+                    ...c,
                     { key: `manual-${Date.now()}`, name: '', lastDigits: '', balanceInput: '', type: 'BANK' },
                   ])
                 }
               >
                 <Plus className="size-4" />
-                Add account manually
+                Add another account
               </Button>
 
-
-              {drafts.length > 0 && (
-                <div className="space-y-3">
-                  {drafts.map((draft) => (
-                    <Card key={draft.key}>
-                      <CardContent className="space-y-3 pt-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex flex-wrap gap-1.5">
-                            {(['BANK', 'CARD', 'WALLET', 'CASH', 'OTHER'] as AccountType[]).map((kind) => (
-                              <button
-                                key={kind}
-                                type="button"
-                                className={`rounded-full border px-2 py-0.5 text-[10px] ${draft.type === kind ? 'border-calm-indigo bg-calm-indigo/15 text-calm-indigo-light' : 'border-border-subtle text-text-muted'}`}
-                                onClick={() => updateDraft(draft.key, { type: kind })}
-                              >
-                                {kind}
-                              </button>
-                            ))}
-                          </div>
-                          <button
-                            type="button"
-                            className="text-[10px] text-text-muted hover:text-gentle-rose"
-                            onClick={() => setDrafts((current) => current.filter((d) => d.key !== draft.key))}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        {draft.sourceTexts && draft.sourceTexts.length > 0 && (
-                          <div className="flex justify-end">
-                            <button
-                              type="button"
-                              className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] text-text-muted hover:text-text-primary"
-                              onClick={() => setInfoDraftKey(infoDraftKey === draft.key ? null : draft.key)}
-                            >
-                              info
-                            </button>
-                          </div>
-                        )}
-
-                        <div className="space-y-1.5">
-                          <Label>Account name</Label>
-                          <Input
-                            className="h-11"
-                            value={draft.name}
-                            placeholder="HDFC Savings"
-                            onChange={(event) => updateDraft(draft.key, { name: event.target.value })}
-                          />
-                        </div>
-                        <div className="flex gap-3">
-                          <div className="flex-1 space-y-1.5">
-                            <Label>Last 4 digits</Label>
-                            <Input
-                              className="h-11"
-                              inputMode="numeric"
-                              maxLength={4}
-                              value={draft.lastDigits}
-                              placeholder="4821"
-                              onChange={(event) =>
-                                updateDraft(draft.key, {
-                                  lastDigits: event.target.value.replace(/\D/g, '').slice(0, 4),
-                                })
-                              }
-                            />
-                          </div>
-                          <div className="flex-[2] space-y-1.5">
-                            <Label>Current balance (₹)</Label>
-                            <Input
-                              className="h-11"
-                              inputMode="decimal"
-                              value={draft.balanceInput}
-                              placeholder="0.00"
-                              onChange={(event) =>
-                                updateDraft(draft.key, { balanceInput: event.target.value })
-                              }
-                            />
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                  <Separator />
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-text-muted">Total</span>
-                    <span className="font-semibold">{formatMinor(totalBalance)}</span>
-                  </div>
+              <div className="space-y-2.5 pt-1">
+                <div>
+                  <h2 className="font-headline text-[15px] font-semibold">Apps to watch</h2>
+                  <p className="text-[13px] text-text-muted">Finxeity only reads alerts from these apps.</p>
                 </div>
-              )}
-
-              <div className="flex flex-col gap-3">
-                <h3 className="font-headline text-[14px] font-semibold text-text-primary">Monitored apps</h3>
-                <AppPicker selected={selectedApps} onChange={setSelectedApps} preselectDefaultSms />
-                <p className="text-xs text-text-muted">
-                  {selectedApps.length === 0 ? 'Select at least one app.' : `${selectedApps.length} app(s) selected.`}
+                <div className="w-full min-w-0 max-w-full overflow-hidden rounded-2xl [&_*]:min-w-0 [&_*]:break-words">
+                  <AppPicker selected={selectedApps} onChange={setSelectedApps} preselectDefaultSms />
+                </div>
+                <p className={`text-[12px] ${selectedApps.length === 0 ? 'text-amber-400' : 'text-text-muted'}`}>
+                  {selectedApps.length === 0
+                    ? 'Pick at least one app, or nothing will be tracked automatically.'
+                    : `${selectedApps.length} app${selectedApps.length === 1 ? '' : 's'} selected.`}
                 </p>
               </div>
-
-            </section>
+            </>
           )}
 
+          {/* =========================== CATEGORIES =========================== */}
           {step === 'categories' && (
-            <section className="flex flex-col gap-5" id="step-3">
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <h2 className="font-headline text-[24px] font-bold tracking-tight text-text-primary">Spend Buckets</h2>
-                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/20 text-calm-indigo-light text-[11px] font-mono" id="category-counter-badge">
-                    {selectedCategories.size} Selected
+            <>
+              <StepHeading
+                icon={Layers}
+                title="What counts as essential"
+                subtitle="Pick the areas you can’t skip. Everything else is treated as flexible spending."
+                aside={
+                  <span className="shrink-0 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-0.5 text-[12px] text-calm-indigo-light tabular-nums">
+                    {selectedCategories.size} chosen
                   </span>
-                </div>
-                <p className="font-sans text-[14px] text-text-secondary">Select your core spend areas to set your calm, guilt-free daily allowance.</p>
+                }
+              />
+
+              <div className="flex gap-3 text-[13px]">
+                <button
+                  type="button"
+                  className="text-calm-indigo-light hover:underline"
+                  onClick={() => setSelectedCategories(new Set(availableCategories.map((c) => c.id)))}
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  className="text-text-muted hover:underline"
+                  onClick={() => setSelectedCategories(new Set())}
+                >
+                  Clear
+                </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5" id="category-chips-grid">
-                {(categoriesQuery.data?.categories ?? []).filter((category) => category.kind === 'EXPENSE').map((category) => {
+              <div className="grid grid-cols-2 gap-2.5">
+                {availableCategories.map((category) => {
                   const active = selectedCategories.has(category.id)
                   return (
                     <button
                       key={category.id}
-                      className={`cat-chip p-3 rounded-xl text-left flex items-start gap-2.5 transition-all ${
-                        active
-                          ? 'is-selected bg-surface-card border border-indigo-500/30 shadow-sm'
-                          : 'bg-surface-canvas border border-border-subtle opacity-60'
-                      }`}
-                      onClick={() => {
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() =>
                         setSelectedCategories((current) => {
                           const nextSet = new Set(current)
                           if (nextSet.has(category.id)) nextSet.delete(category.id)
                           else nextSet.add(category.id)
                           return nextSet
                         })
-                      }}
-                      type="button"
+                      }
+                      className={`relative flex items-center gap-2.5 rounded-2xl border p-3 text-left transition-all active:scale-[0.97] ${
+                        active
+                          ? 'border-indigo-500/40 bg-gradient-to-br from-indigo-600/15 to-surface-card shadow-sm shadow-indigo-500/10'
+                          : 'border-border-subtle bg-surface-canvas opacity-70 hover:opacity-100'
+                      }`}
                     >
-                      <span className="text-lg">{category.icon ?? '•'}</span>
-                      <div className="flex flex-col min-w-0">
-                        <span className="text-[13px] font-semibold text-text-primary truncate">{category.name}</span>
-                        <span className={`text-[11px] font-mono status-text ${active ? 'text-calm-indigo-light' : 'text-text-muted'}`}>
-                          {active ? 'Active' : 'Inactive'}
+                      <span className="text-[22px] leading-none">{category.icon ?? '•'}</span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{category.name}</span>
+                      {active && (
+                        <span className="fx-pop absolute right-2 top-2 flex size-4 items-center justify-center rounded-full bg-calm-indigo text-white">
+                          <Check size={10} strokeWidth={3} />
                         </span>
-                      </div>
+                      )}
                     </button>
                   )
                 })}
               </div>
-
-            </section>
+            </>
           )}
 
+          {/* ============================ RECURRING =========================== */}
           {step === 'recurring' && (
-            <section className="flex flex-col gap-5" id="step-4">
-              <div className="flex flex-col gap-1.5">
-                <h2 className="font-headline text-[24px] font-bold tracking-tight text-text-primary">Recurring Outflows</h2>
-                <p className="font-sans text-[14px] text-text-secondary">Keep subscriptions and EMIs separated from daily pocket money.</p>
-              </div>
+            <>
+              <StepHeading
+                icon={Repeat}
+                title="Things that repeat"
+                subtitle="Subscriptions and EMIs we spotted. Confirm the real ones so they stay out of your daily money."
+              />
 
-              <div className="flex flex-col gap-2.5" id="recurring-list-items">
-                {(recurringQuery.data?.recurring ?? []).map((payment: RecurringSummary) => (
-                  <div key={payment.merchantId ?? payment.name} className="p-3.5 rounded-xl bg-surface-card border border-border-subtle flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-surface-raised flex items-center justify-center font-mono text-[12px] font-semibold text-rose-400">
-                        {payment.name.charAt(0)}
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-[14px] font-semibold text-text-primary">{payment.name}</span>
-                        <span className="text-[12px] text-text-muted">Detected recurring</span>
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <span className="font-mono text-[13px] font-semibold text-text-primary">
-                        {formatMinor(payment.amountMinor)}
-                        <span className="text-text-muted font-normal text-[11px]">/{payment.cadence === 'MONTHLY' ? 'mo' : payment.cadence.toLowerCase()}</span>
-                      </span>
-                      <button
-                        className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+              {recurring.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-border-subtle px-4 py-9 text-center">
+                  <Repeat className="mx-auto mb-2 size-7 text-text-muted" />
+                  <p className="text-[14px] font-medium text-text-secondary">Nothing repeating yet</p>
+                  <p className="mx-auto mt-1 max-w-[260px] text-[13px] text-text-muted">
+                    Payments show up here once they appear two or more times in your alerts. You can continue now.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  {recurring.map((payment: RecurringSummary) => {
+                    const id = payment.merchantId ?? payment.name
+                    return (
+                      <div
+                        key={id}
+                        className={`flex items-center gap-3 rounded-2xl border p-3.5 transition-colors ${
                           payment.confirmed
-                            ? 'bg-calm-indigo/15 border-calm-indigo/30 text-calm-indigo-light'
-                            : 'bg-surface-raised border-border-subtle text-text-muted'
+                            ? 'border-indigo-500/35 bg-gradient-to-r from-indigo-600/10 to-surface-card'
+                            : 'border-border-subtle bg-surface-card'
                         }`}
-                        onClick={() =>
-                          setStatus.mutate({
-                            merchantId: payment.merchantId ?? payment.name,
-                            status: payment.confirmed ? 'SUGGESTED' : 'CONFIRMED',
-                          })
-                        }
-                        type="button"
                       >
-                        {payment.confirmed ? 'Confirmed' : 'Mark real'}
-                      </button>
+                        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface-raised font-headline text-[15px] font-bold text-calm-indigo-light">
+                          {payment.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[14px] font-semibold">{payment.name}</p>
+                          <p className="text-[12px] tabular-nums text-text-muted">
+                            {formatMinor(payment.amountMinor)} ·{' '}
+                            {String(payment.cadence).toLowerCase().replace(/^./, (c) => c.toUpperCase())}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          aria-pressed={payment.confirmed}
+                          disabled={setStatus.isPending}
+                          onClick={() =>
+                            setStatus.mutate({ merchantId: id, status: payment.confirmed ? 'SUGGESTED' : 'CONFIRMED' })
+                          }
+                          className={`flex h-9 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-all active:scale-95 ${
+                            payment.confirmed
+                              ? 'border-calm-indigo/40 bg-calm-indigo text-white'
+                              : 'border-border-subtle bg-surface-raised text-text-secondary hover:text-text-primary'
+                          }`}
+                        >
+                          {payment.confirmed ? <Check size={13} /> : null}
+                          {payment.confirmed ? 'Confirmed' : 'Yes, it’s real'}
+                        </button>
+                      </div>
+                    )
+                  })}
+
+                  <div className="mt-1 grid grid-cols-2 gap-2.5">
+                    <div className="rounded-2xl border border-border-subtle bg-surface-canvas p-3.5">
+                      <p className="text-[12px] text-text-muted">Spotted per month</p>
+                      <p className="mt-0.5 font-headline text-[17px] font-bold tabular-nums">
+                        {formatMinor(Math.round(recurringMonthly))}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/10 p-3.5">
+                      <p className="text-[12px] text-text-secondary">Confirmed per month</p>
+                      <p className="mt-0.5 font-headline text-[17px] font-bold tabular-nums text-calm-indigo-light">
+                        {formatMinor(Math.round(confirmedRecurringMonthly))}
+                      </p>
                     </div>
                   </div>
-                ))}
-                {(recurringQuery.data?.recurring ?? []).length === 0 && (
-                  <p className="py-6 text-center text-sm text-text-muted">Nothing recurring yet.</p>
-                )}
-              </div>
+                </div>
+              )}
+            </>
+          )}
 
-              {(recurringQuery.data?.recurring ?? []).length > 0 && (
-                <div className="p-3 rounded-xl bg-surface-canvas border border-border-subtle flex items-center justify-between">
-                  <span className="text-[12px] font-mono text-text-muted">Monthly Recurring</span>
-                  <span className="font-mono text-[14px] text-calm-indigo-light font-bold">
-                    {formatMinor(
-                      Math.round(
-                        (recurringQuery.data?.recurring ?? []).reduce((sum, payment) => {
-                          const months = payment.cadence === 'QUARTERLY' ? 3 : 1
-                          return sum + payment.amountMinor / months
-                        }, 0),
-                      ),
-                    )}
-                    /mo
-                  </span>
+          {/* ============================== FIXED ============================= */}
+          {step === 'fixed' && (
+            <>
+              <StepHeading
+                icon={Wallet}
+                title="Fixed monthly costs"
+                subtitle="Rent, school fees, anything you must pay before spending on anything else."
+              />
+
+              {commitments.length > 0 && (
+                <div className="flex flex-col gap-2.5">
+                  {commitments.map((commitment: Commitment) => (
+                    <div
+                      key={commitment.id}
+                      className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-surface-card p-3.5"
+                    >
+                      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-raised text-calm-indigo-light">
+                        <Wallet size={18} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[14px] font-semibold">{commitment.name}</p>
+                        <p className="text-[12px] text-text-muted">
+                          Due {new Date(commitment.dueAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        </p>
+                      </div>
+                      <span className="text-[14px] font-semibold tabular-nums">{formatMinor(commitment.amountMinor)}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${commitment.name}`}
+                        className="rounded-full p-2 text-text-muted hover:bg-surface-raised hover:text-gentle-rose"
+                        onClick={() => removeCommitment.mutate(commitment.id)}
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
 
-            </section>
-          )}
-
-          {step === 'fixed' && (
-            <section className="flex flex-col gap-5" id="step-5">
-              <div className="flex flex-col gap-1.5">
-                <h2 className="font-headline text-[24px] font-bold tracking-tight text-text-primary">Fixed Living Costs</h2>
-                <p className="font-sans text-[14px] text-text-secondary">Mandatory monthly overhead before your discretionary budget is formed.</p>
-              </div>
-
-              <div className="flex flex-col gap-2.5">
-                {commitments.map((commitment: Commitment) => (
-                  <div key={commitment.id} className="p-3.5 rounded-xl bg-surface-card border border-border-subtle flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-surface-raised border border-border-subtle flex items-center justify-center text-calm-indigo-light">
-                        <Wallet size={19} />
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-[14px] font-semibold text-text-primary">{commitment.name}</span>
-                        <span className="text-[12px] text-text-muted">Due {new Date(commitment.dueAt).toLocaleDateString()}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-[13px] font-semibold text-text-primary">{formatMinor(commitment.amountMinor)}</span>
-                      <button
-                        className="text-xs text-text-muted hover:text-text-primary"
-                        onClick={() => removeCommitment.mutate(commitment.id)}
-                        type="button"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {commitments.length === 0 && (
-                  <p className="py-6 text-center text-sm text-text-muted">No fixed costs yet.</p>
-                )}
-              </div>
-
-              <div className="p-4 rounded-2xl bg-surface-card border border-border-subtle flex flex-col gap-3">
-                <span className="font-headline text-[14px] font-semibold text-text-primary">Add Fixed Cost</span>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-mono text-text-muted">NAME</label>
-                  <input
-                    className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] placeholder:text-text-muted focus:outline-none focus:border-calm-indigo transition-colors"
-                    placeholder="Apartment Rent"
-                    value={commitmentName}
-                    onChange={(event) => setCommitmentName(event.target.value)}
+              <Panel className="space-y-3.5">
+                <h2 className="font-headline text-[15px] font-semibold">Add a fixed cost</h2>
+                <Field
+                  label="What is it?"
+                  placeholder="Apartment rent"
+                  value={commitmentName}
+                  onChange={(e) => setCommitmentName(e.target.value)}
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <Field
+                    label="Amount"
+                    prefix="₹"
+                    inputMode="decimal"
+                    placeholder="28000"
+                    value={commitmentAmount}
+                    onChange={(e) => setCommitmentAmount(e.target.value)}
+                  />
+                  <Field
+                    label="Next due date"
+                    type="date"
+                    value={commitmentDue}
+                    onChange={(e) => setCommitmentDue(e.target.value)}
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-mono text-text-muted">AMOUNT (₹)</label>
-                    <input
-                      className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] font-mono focus:outline-none focus:border-calm-indigo transition-colors"
-                      placeholder="28000"
-                      value={commitmentAmount}
-                      onChange={(event) => setCommitmentAmount(event.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-mono text-text-muted">DUE DATE</label>
-                    <input
-                      className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] focus:outline-none focus:border-calm-indigo transition-colors"
-                      type="date"
-                      value={commitmentDue}
-                      onChange={(event) => setCommitmentDue(event.target.value)}
-                    />
-                  </div>
-                </div>
                 <Button
-                  className="h-11"
-                  disabled={addCommitment.isPending || !commitmentName || !commitmentAmount}
+                  className="h-11 w-full"
+                  disabled={
+                    addCommitment.isPending ||
+                    !commitmentName.trim() ||
+                    !((parseMajorToMinor(commitmentAmount) ?? 0) > 0)
+                  }
                   onClick={() => addCommitment.mutate()}
                 >
+                  <Plus className="size-4" />
                   {addCommitment.isPending ? 'Adding…' : 'Add fixed cost'}
                 </Button>
-              </div>
+              </Panel>
 
-              <div className="p-4 rounded-xl bg-surface-card border border-border-subtle flex items-center justify-between">
-                <div className="flex flex-col">
-                  <span className="text-[10px] font-mono text-text-muted uppercase">Fixed Commitments</span>
-                  <span className="text-[13px] font-semibold text-text-primary">Total Overhead</span>
-                </div>
-                <span className="font-mono text-[18px] font-bold text-calm-indigo-light">
+              <div className="flex items-center justify-between rounded-2xl border border-indigo-500/20 bg-gradient-to-r from-indigo-600/10 to-violet-500/5 px-4 py-3.5">
+                <span className="text-[13px] text-text-secondary">Total set aside each month</span>
+                <span className="font-headline text-[20px] font-bold tabular-nums text-calm-indigo-light">
                   {formatMinor(fixedTotal)}
-                  <span className="text-[12px] font-normal text-text-muted">/mo</span>
                 </span>
               </div>
-
-            </section>
+            </>
           )}
 
+          {/* ============================== GOALS ============================= */}
           {step === 'goals' && (
-            <section className="flex flex-col gap-5" id="step-6">
-              <div className="flex flex-col gap-1.5">
-                <h2 className="font-headline text-[24px] font-bold tracking-tight text-text-primary">Reserves &amp; Targets</h2>
-                <p className="font-sans text-[14px] text-text-secondary">Protected reserves to keep you shielded from unexpected life changes.</p>
-              </div>
+            <>
+              <StepHeading
+                icon={Target}
+                title="Goals and buffer"
+                subtitle="Protect a cushion and tell us what you’re saving toward. We keep them out of your daily number."
+              />
 
-              <div className="space-y-3">
-                {goals.map((goal: Goal) => {
-                  const pct = goal.targetMinor > 0 ? Math.min(100, (goal.savedMinor / goal.targetMinor) * 100) : 0
-                  return (
-                    <div key={goal.id} className="p-4 rounded-2xl bg-surface-card border border-border-subtle flex flex-col gap-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-xl">🛡️</span>
-                          <div className="flex flex-col">
-                            <span className="text-[14px] font-semibold text-text-primary">{goal.name}</span>
-                            <span className="text-[12px] text-text-muted">Goal: {formatMinor(goal.targetMinor)}</span>
-                          </div>
+              {goals.length > 0 && (
+                <div className="space-y-2.5">
+                  {goals.map((goal: Goal) => {
+                    const pct = goal.targetMinor > 0 ? Math.min(100, (goal.savedMinor / goal.targetMinor) * 100) : 0
+                    return (
+                      <div
+                        key={goal.id}
+                        className="flex items-center gap-3.5 rounded-2xl border border-border-subtle bg-surface-card p-4"
+                      >
+                        <div className="relative">
+                          <Ring pct={pct} />
+                          <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold tabular-nums">
+                            {Math.round(pct)}%
+                          </span>
                         </div>
-                        <span className="font-mono text-[13px] text-calm-indigo-light font-bold">{pct.toFixed(1)}%</span>
-                      </div>
-                      <div className="w-full h-1.5 rounded-full bg-surface-raised overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-calm-indigo to-calm-indigo-light rounded-full" style={{ width: `${pct}%` }} />
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] font-mono text-text-muted">
-                        <span>Seeded: {formatMinor(goal.savedMinor)}</span>
-                        <button className="text-text-muted hover:text-text-primary" onClick={() => removeGoal.mutate(goal.id)} type="button">
-                          Remove
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[14px] font-semibold">{goal.name}</p>
+                          <p className="text-[12px] tabular-nums text-text-muted">
+                            {formatMinor(goal.savedMinor)} of {formatMinor(goal.targetMinor)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${goal.name}`}
+                          className="rounded-full p-2 text-text-muted hover:bg-surface-raised hover:text-gentle-rose"
+                          onClick={() => removeGoal.mutate(goal.id)}
+                        >
+                          <X size={15} />
                         </button>
                       </div>
-                    </div>
-                  )
-                })}
-                {goals.length === 0 && (
-                  <p className="py-6 text-center text-sm text-text-muted">No goals yet.</p>
-                )}
-              </div>
-
-              <div className="p-4 rounded-2xl bg-surface-card border border-border-subtle flex flex-col gap-3">
-                <span className="font-headline text-[14px] font-semibold text-text-primary">Add a Goal</span>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-mono text-text-muted">NAME</label>
-                  <input
-                    className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] placeholder:text-text-muted focus:outline-none focus:border-calm-indigo transition-colors"
-                    placeholder="Emergency Cushion"
-                    value={goalName}
-                    onChange={(event) => setGoalName(event.target.value)}
-                  />
+                    )
+                  })}
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-mono text-text-muted">TARGET (₹)</label>
-                    <input
-                      className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] font-mono focus:outline-none focus:border-calm-indigo transition-colors"
-                      placeholder="150000"
-                      value={goalTarget}
-                      onChange={(event) => setGoalTarget(event.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-mono text-text-muted">SAVED (₹)</label>
-                    <input
-                      className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] font-mono focus:outline-none focus:border-calm-indigo transition-colors"
-                      placeholder="40000"
-                      value={goalSaved}
-                      onChange={(event) => setGoalSaved(event.target.value)}
-                    />
-                  </div>
+              )}
+
+              <Panel className="space-y-3.5">
+                <h2 className="font-headline text-[15px] font-semibold">Add a goal</h2>
+                <Field
+                  label="Goal name"
+                  placeholder="Emergency fund"
+                  value={goalName}
+                  onChange={(e) => setGoalName(e.target.value)}
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <Field
+                    label="Target"
+                    prefix="₹"
+                    inputMode="decimal"
+                    placeholder="150000"
+                    value={goalTarget}
+                    onChange={(e) => setGoalTarget(e.target.value)}
+                  />
+                  <Field
+                    label="Saved so far"
+                    prefix="₹"
+                    inputMode="decimal"
+                    placeholder="40000"
+                    value={goalSaved}
+                    onChange={(e) => setGoalSaved(e.target.value)}
+                  />
                 </div>
                 <Button
-                  className="h-11"
-                  disabled={addGoal.isPending || !goalName || !goalTarget}
+                  className="h-11 w-full"
+                  variant="secondary"
+                  disabled={addGoal.isPending || !goalName.trim() || !((parseMajorToMinor(goalTarget) ?? 0) > 0)}
                   onClick={() => addGoal.mutate()}
                 >
+                  <Plus className="size-4" />
                   {addGoal.isPending ? 'Adding…' : 'Add goal'}
                 </Button>
-              </div>
+              </Panel>
 
-              <div className="p-4 rounded-2xl bg-surface-card border border-border-subtle flex flex-col gap-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono uppercase text-text-muted">Automatic Savings Rate</span>
-                  <span className="text-[13px] text-calm-indigo-light font-mono font-bold" id="savings-rate-label">
-                    {savingsRate}% (₹{Math.round((savingsRate / 100) * 85000).toLocaleString('en-IN')}/mo)
-                  </span>
-                </div>
-                <input
-                  className="w-full accent-calm-indigo cursor-pointer h-1.5 bg-surface-raised rounded-lg appearance-none"
-                  max={50}
-                  min={5}
-                  onChange={(event) => setSavingsRate(Number(event.target.value))}
-                  step={5}
-                  type="range"
-                  value={savingsRate}
+              <Panel className="space-y-4">
+                <h2 className="font-headline text-[15px] font-semibold">Buffer and income</h2>
+                <Field
+                  label="Emergency buffer to protect"
+                  prefix="₹"
+                  inputMode="decimal"
+                  placeholder="25000"
+                  value={bufferInput}
+                  onChange={(e) => setBufferInput(e.target.value)}
                 />
-                <span className="text-[12px] text-text-muted">Safely stored in your goals before computing your everyday spend balance.</span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-surface-card border border-border-subtle flex flex-col gap-3">
-                <span className="font-headline text-[14px] font-semibold text-text-primary">Financial settings</span>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-mono text-text-muted">Emergency buffer (₹)</label>
-                  <input
-                    className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] font-mono focus:outline-none focus:border-calm-indigo transition-colors"
-                    value={bufferInput}
-                    onChange={(event) => setBufferInput(event.target.value)}
+                <div className="grid grid-cols-2 gap-3">
+                  <Field
+                    label="Payday (day of month)"
+                    type="number"
+                    min={1}
+                    max={31}
+                    inputMode="numeric"
+                    placeholder="1"
+                    value={incomeDay}
+                    onChange={(e) => setIncomeDay(e.target.value)}
+                  />
+                  <Field
+                    label="Monthly income"
+                    prefix="₹"
+                    inputMode="decimal"
+                    placeholder="85000"
+                    value={expectedIncome}
+                    onChange={(e) => setExpectedIncome(e.target.value)}
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-mono text-text-muted">Income day</label>
-                    <input
-                      className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] font-mono focus:outline-none focus:border-calm-indigo transition-colors"
-                      type="number"
-                      value={incomeDay}
-                      onChange={(event) => setIncomeDay(event.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-mono text-text-muted">Expected income (₹)</label>
-                    <input
-                      className="w-full px-3 py-2 rounded-xl bg-surface-canvas border border-border-subtle text-text-primary text-[13px] font-mono focus:outline-none focus:border-calm-indigo transition-colors"
-                      value={expectedIncome}
-                      onChange={(event) => setExpectedIncome(event.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
 
-            </section>
+                <div className="space-y-2.5 border-t border-border-subtle pt-4">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[12px] text-text-secondary">Save each month</Label>
+                    <span className="text-[13px] font-semibold tabular-nums text-calm-indigo-light">
+                      {savingsRate}%
+                      {(parseMajorToMinor(expectedIncome) ?? 0) > 0 &&
+                        ` · ${formatMinor(Math.round((parseMajorToMinor(expectedIncome) ?? 0) * (savingsRate / 100)))}`}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={50}
+                    step={5}
+                    value={savingsRate}
+                    aria-label="Savings rate"
+                    onChange={(e) => setSavingsRate(Number(e.target.value))}
+                    className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-surface-raised accent-calm-indigo"
+                  />
+                  <p className="text-[12px] text-text-muted">
+                    Used to work out your daily number on the next screen. Add income above to see the amount.
+                  </p>
+                </div>
+              </Panel>
+            </>
           )}
 
+          {/* ============================== READY ============================= */}
           {step === 'ready' && (
-            <section className="flex flex-col gap-5" id="step-7">
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-calm-indigo-light animate-ping" />
-                  <h2 className="font-headline text-[24px] font-bold tracking-tight text-text-primary">Everything Is Ready</h2>
-                </div>
-                <p className="font-sans text-[14px] text-text-secondary">Your local configuration is set up. Welcome to anxiety-free financial clarity.</p>
+            <>
+              <div className="relative overflow-hidden rounded-3xl border border-indigo-500/25 bg-gradient-to-b from-indigo-600/20 via-surface-card to-surface-card p-6 text-center">
+                <div className="pointer-events-none absolute left-1/2 top-0 size-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-calm-indigo/30 blur-3xl" />
+                <p className="relative text-[14px] text-text-secondary">You can comfortably spend about</p>
+                <p
+                  className={`relative mt-1 font-headline text-[56px] font-extrabold leading-none tracking-tight tabular-nums ${
+                    calm.spendable > 0 ? 'text-text-primary' : 'text-gentle-rose'
+                  }`}
+                >
+                  {formatMinor(animatedPerDay)}
+                </p>
+                <p className="relative mt-1.5 text-[14px] font-medium text-calm-indigo-light">
+                  a day, for the next {calm.days} day{calm.days === 1 ? '' : 's'}
+                </p>
+                <p className="relative mx-auto mt-4 max-w-[290px] text-[12px] leading-relaxed text-text-muted">
+                  {calm.spendable > 0
+                    ? 'An estimate from your balances after the buffer, fixed costs, confirmed repeats and savings. It sharpens as alerts come in.'
+                    : 'Your commitments are higher than your balance right now. Go back and check your balances, buffer or savings rate.'}
+                </p>
               </div>
 
-              <div className="p-4 rounded-2xl bg-surface-card border border-border-subtle flex flex-col gap-4 shadow-sm">
-                <div className="flex flex-col gap-1">
-                  <span className="text-[11px] font-mono uppercase text-text-muted">Starting Balance</span>
-                  <div className="flex items-baseline justify-between">
-                    <span className="font-headline text-[28px] font-bold text-text-primary font-mono tracking-tight">
-                      {formatMinor(totalBalance)}
-                      <span className="text-[15px] text-text-muted font-normal">.00</span>
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full bg-surface-raised text-calm-indigo-light text-[11px] font-mono border border-border-subtle">
-                      {drafts.length || accountsQuery.data?.accounts.length || 0} Accounts
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5 pt-1">
-                  <div className="p-3 rounded-xl bg-surface-canvas border border-border-subtle flex flex-col gap-1">
-                    <span className="text-[10px] font-mono text-text-muted">MONTHLY FIXED</span>
-                    <span className="text-[14px] font-mono font-bold text-text-primary">{formatMinor(fixedTotal)}</span>
-                    <span className="text-[11px] text-text-muted">Rent &amp; Subscriptions</span>
-                  </div>
-                  <div className="p-3 rounded-xl bg-surface-canvas border border-border-subtle flex flex-col gap-1">
-                    <span className="text-[10px] font-mono text-text-muted">CALM DAILY LIMIT</span>
-                    <span className="text-[14px] font-mono font-bold text-calm-emerald">₹2,150 / day</span>
-                    <span className="text-[11px] text-text-muted">Safe discretionary</span>
-                  </div>
-                  <div className="p-3 rounded-xl bg-surface-canvas border border-border-subtle flex flex-col gap-1">
-                    <span className="text-[10px] font-mono text-text-muted">CATEGORIES</span>
-                    <span className="text-[14px] font-mono font-bold text-text-primary">{selectedCategories.size} Active</span>
-                    <span className="text-[11px] text-text-muted">Focused buckets</span>
-                  </div>
-                  <div className="p-3 rounded-xl bg-surface-canvas border border-border-subtle flex flex-col gap-1">
-                    <span className="text-[10px] font-mono text-text-muted">RESERVES</span>
-                    <span className="text-[14px] font-mono font-bold text-calm-violet">{goals.length} goals</span>
-                    <span className="text-[11px] text-text-muted">Protected targets</span>
-                  </div>
-                </div>
-
-                <div className="p-3 rounded-xl bg-surface-raised/70 border border-border-subtle flex items-center gap-2.5">
-                  <ShieldCheck className="text-calm-indigo-light" size={20} />
-                  <div className="flex flex-col">
-                    <span className="text-[12px] font-semibold text-text-primary">Air-Gapped Guarantee</span>
-                    <span className="text-[11px] text-text-muted">Data stays encrypted purely on your phone.</span>
-                  </div>
-                </div>
+              <div className="grid grid-cols-2 gap-2.5">
+                {[
+                  { label: 'Starting balance', value: formatMinor(animatedTotal), sub: `${namedDrafts.length || accountsQuery.data?.accounts.length || 0} accounts`, go: 2 },
+                  { label: 'Fixed per month', value: formatMinor(fixedTotal), sub: `${commitments.length} cost${commitments.length === 1 ? '' : 's'}`, go: 5 },
+                  { label: 'Essential buckets', value: String(selectedCategories.size), sub: 'chosen', go: 3 },
+                  { label: 'Goals', value: String(goals.length), sub: calm.saving > 0 ? `saving ${formatMinor(calm.saving)}/mo` : 'none yet', go: 6 },
+                ].map((tile) => (
+                  <button
+                    key={tile.label}
+                    type="button"
+                    onClick={() => goTo(tile.go)}
+                    className="rounded-2xl border border-border-subtle bg-surface-card p-3.5 text-left transition-colors hover:border-indigo-500/40"
+                  >
+                    <p className="text-[12px] text-text-muted">{tile.label}</p>
+                    <p className="mt-0.5 font-headline text-[18px] font-bold tabular-nums">{tile.value}</p>
+                    <p className="text-[11px] text-text-muted">{tile.sub} · Edit</p>
+                  </button>
+                ))}
               </div>
 
+              <div className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-surface-raised/60 p-3.5">
+                <Lock className="size-5 shrink-0 text-calm-indigo-light" />
+                <p className="text-[12px] leading-relaxed text-text-secondary">
+                  Everything above is encrypted and kept only on this phone.
+                </p>
+              </div>
+
+              {!granted && (
+                <Alert variant="destructive">
+                  <AlertTitle>Notification access is still off</AlertTitle>
+                  <AlertDescription>
+                    Finxeity can’t track new spending until you turn it on.{' '}
+                    <button type="button" className="underline" onClick={() => goTo(1)}>
+                      Fix it now
+                    </button>
+                  </AlertDescription>
+                </Alert>
+              )}
               {!ignoring && (
                 <Button
                   className="h-11 w-full"
                   variant="outline"
                   onClick={() => LocalExpense.requestIgnoreBatteryOptimizations()}
                 >
+                  <BatteryCharging className="size-4" />
                   Exempt from battery optimization
                 </Button>
               )}
-
-            </section>
+            </>
           )}
         </div>
       </div>
 
-      <footer className="shrink-0 border-t border-border-subtle bg-surface-canvas/95 backdrop-blur-xl px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-        <div className="mx-auto w-full max-w-md">
-          {step === 'privacy' && (
+      {/* ------------------------------ footer ------------------------------ */}
+      <footer className="shrink-0 border-t border-border-subtle bg-surface-canvas/90 px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-md items-center gap-3">
+          {stepIndex > 0 && (
             <button
-              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-calm-indigo to-indigo-600 hover:from-indigo-500 hover:to-indigo-600 text-white font-headline text-[15px] font-semibold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 active:scale-[0.98] transition-all"
-              onClick={() => goToStep(2)}
               type="button"
+              onClick={back}
+              disabled={busy}
+              aria-label="Back"
+              className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-card text-text-secondary transition-colors hover:bg-surface-raised hover:text-text-primary"
             >
-              <span>Begin Setup</span>
-              <ArrowRight size={19} />
+              <ArrowLeft size={19} />
             </button>
           )}
-
-          {step === 'access' && (
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                className="py-3 px-4 rounded-xl bg-surface-card border border-border-subtle hover:bg-surface-raised text-text-secondary hover:text-text-primary font-headline text-[14px] font-semibold transition-colors"
-                onClick={back}
-                type="button"
-              >
-                Back
-              </button>
-              <button
-                className="py-3 px-4 rounded-xl bg-calm-indigo hover:bg-indigo-600 text-white font-headline text-[14px] font-semibold shadow-md shadow-indigo-600/20 transition-all"
-                onClick={next}
-                type="button"
-              >
-                Continue →
-              </button>
-            </div>
-          )}
-
-          {step === 'accounts' && (
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                className="py-3 px-4 rounded-xl bg-surface-card border border-border-subtle hover:bg-surface-raised text-text-secondary hover:text-text-primary font-headline text-[14px] font-semibold transition-colors"
-                onClick={back}
-                type="button"
-              >
-                Back
-              </button>
-              <button
-                className="py-3 px-4 rounded-xl bg-calm-indigo hover:bg-indigo-600 text-white font-headline text-[14px] font-semibold shadow-md shadow-indigo-600/20 transition-all"
-                onClick={async () => {
-                  try {
-                    if (selectedApps.length > 0) await saveApps.mutateAsync(selectedApps)
-                    await saveBalances.mutateAsync()
-                  } catch {
-                    toast.error('Could not save balances')
-                  }
-                  next()
-                }}
-                type="button"
-              >
-                Continue →
-              </button>
-            </div>
-          )}
-
-          {step === 'categories' && (
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                className="py-3 px-4 rounded-xl bg-surface-card border border-border-subtle hover:bg-surface-raised text-text-secondary hover:text-text-primary font-headline text-[14px] font-semibold transition-colors"
-                onClick={back}
-                type="button"
-              >
-                Back
-              </button>
-              <button
-                className="py-3 px-4 rounded-xl bg-calm-indigo hover:bg-indigo-600 text-white font-headline text-[14px] font-semibold shadow-md shadow-indigo-600/20 transition-all"
-                onClick={async () => {
-                  await saveCategories.mutateAsync()
-                  next()
-                }}
-                type="button"
-              >
-                Continue →
-              </button>
-            </div>
-          )}
-
-          {step === 'recurring' && (
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                className="py-3 px-4 rounded-xl bg-surface-card border border-border-subtle hover:bg-surface-raised text-text-secondary hover:text-text-primary font-headline text-[14px] font-semibold transition-colors"
-                onClick={back}
-                type="button"
-              >
-                Back
-              </button>
-              <button
-                className="py-3 px-4 rounded-xl bg-calm-indigo hover:bg-indigo-600 text-white font-headline text-[14px] font-semibold shadow-md shadow-indigo-600/20 transition-all"
-                onClick={next}
-                type="button"
-              >
-                Continue →
-              </button>
-            </div>
-          )}
-
-          {step === 'fixed' && (
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                className="py-3 px-4 rounded-xl bg-surface-card border border-border-subtle hover:bg-surface-raised text-text-secondary hover:text-text-primary font-headline text-[14px] font-semibold transition-colors"
-                onClick={back}
-                type="button"
-              >
-                Back
-              </button>
-              <button
-                className="py-3 px-4 rounded-xl bg-calm-indigo hover:bg-indigo-600 text-white font-headline text-[14px] font-semibold shadow-md shadow-indigo-600/20 transition-all"
-                onClick={next}
-                type="button"
-              >
-                Continue →
-              </button>
-            </div>
-          )}
-
-          {step === 'goals' && (
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                className="py-3 px-4 rounded-xl bg-surface-card border border-border-subtle hover:bg-surface-raised text-text-secondary hover:text-text-primary font-headline text-[14px] font-semibold transition-colors"
-                onClick={back}
-                type="button"
-              >
-                Back
-              </button>
-              <button
-                className="py-3 px-4 rounded-xl bg-calm-indigo hover:bg-indigo-600 text-white font-headline text-[14px] font-semibold shadow-md shadow-indigo-600/20 transition-all"
-                onClick={async () => {
-                  await saveFinancial.mutateAsync()
-                  next()
-                }}
-                type="button"
-              >
-                Review →
-              </button>
-            </div>
-          )}
-
-          {step === 'ready' && (
-            <div className="flex flex-col gap-2.5">
-              <button
-                className="w-full py-4 px-4 rounded-xl bg-gradient-to-r from-calm-indigo to-indigo-600 hover:from-indigo-500 hover:to-indigo-600 text-white font-headline text-[15px] font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 active:scale-[0.98] transition-all"
-                id="btn-final-launch"
-                onClick={finish}
-                type="button"
-              >
-                <CheckCircle2 size={20} />
-                <span id="launch-button-label">Get Started with Finxeity</span>
-              </button>
-              <button
-                className="w-full py-2 px-4 rounded-xl bg-transparent text-text-muted hover:text-text-primary text-[13px] transition-colors text-center"
-                onClick={() => goToStep(1)}
-                type="button"
-              >
-                Review Preferences
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => void onPrimary()}
+            disabled={busy}
+            className={`flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-calm-indigo to-indigo-600 font-headline text-[15px] font-semibold text-white shadow-lg shadow-indigo-600/25 transition-all hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.98] disabled:opacity-70 ${
+              step === 'ready' ? 'h-14 text-[16px]' : ''
+            }`}
+          >
+            {busy ? (
+              <>
+                <RefreshCw size={17} className="animate-spin" />
+                <span>{step === 'ready' ? 'Opening…' : 'Saving…'}</span>
+              </>
+            ) : (
+              <>
+                {step === 'ready' && <Sparkles size={18} />}
+                <span>{primaryLabel[step]}</span>
+                {step !== 'ready' && <ArrowRight size={18} />}
+              </>
+            )}
+          </button>
         </div>
       </footer>
 
-    </div>
+      {/* -------------------------- detection details ------------------------- */}
       <Dialog open={infoDraftKey !== null} onOpenChange={(open) => !open && setInfoDraftKey(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Candidate messages</DialogTitle>
-            <DialogDescription>
-              Messages that vouched for this account.
-            </DialogDescription>
+            <DialogTitle>Why we found this account</DialogTitle>
+            <DialogDescription>These alerts mention it. They are read on your phone only.</DialogDescription>
           </DialogHeader>
           <div className="max-h-80 space-y-2 overflow-y-auto">
-            {(() => {
-              const draft = drafts.find((d) => d.key === infoDraftKey)
-              const messages = draft?.sourceTexts ?? []
-              if (messages.length === 0) {
-                return <p className="text-sm text-muted-foreground">No candidate messages.</p>
-              }
-              return messages.map((text, index) => (
+            {(infoDraft?.sourceTexts ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No alerts to show.</p>
+            ) : (
+              infoDraft?.sourceTexts?.map((text, index) => (
                 <div key={index} className={`flex ${index % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
                   <div className="max-w-[85%] rounded-2xl border border-border-subtle bg-surface-raised px-3 py-2 text-xs text-text-primary">
                     {text}
                   </div>
                 </div>
               ))
-            })()}
+            )}
           </div>
         </DialogContent>
       </Dialog>
-
     </div>
   )
 }

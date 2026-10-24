@@ -1,40 +1,120 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import {
-  ArrowDownRight,
-  ArrowUpRight,
-  BellRing,
-  ChartLine,
-  PieChart,
-  House,
-  Lightbulb,
-  Plus,
-  Receipt,
-  Sparkle,
-  Target,
-  TrendingUp,
-} from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
+import { ArrowDownLeft, ArrowUpRight, BellRing, Check, ChevronLeft, ChevronRight, Lightbulb, RefreshCw, Sparkle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { LocalExpense } from '@/lib/plugin'
 import type { Commitment, Dashboard, Goal, Transaction } from '@/lib/plugin'
 import { formatMinor } from '@/lib/money'
 import { formatMonth, formatRelativeTime } from '@/lib/format'
-import { queryKeys } from '@/lib/query'
+import { queryKeys, type TransactionFilters } from '@/lib/query'
+import { cn } from '@/lib/utils'
+
+/* ────────────────────────────── config ────────────────────────────── */
+
+/** Monthly spending cap used by the pacing gauge (₹75,000, in minor units).
+ *  Swap this for a real budget value from the API when you have one. */
+const MONTHLY_CAP_MINOR = 7_500_000
+
+const PERIODS = [
+  { label: '7 days', days: 7 },
+  { label: '30 days', days: 30 },
+  { label: '90 days', days: 90 },
+]
+
+const SLICE_COLORS = ['#818cf8', '#34d399', '#f472b6', '#fbbf24', '#38bdf8', '#94a3b8']
+
+const CATEGORY_META: { match: string[]; emoji: string; tint: string }[] = [
+  { match: ['food', 'dining'], emoji: '🍽️', tint: 'bg-orange-500/15 text-orange-300' },
+  { match: ['grocer'], emoji: '🛒', tint: 'bg-lime-500/15 text-lime-300' },
+  { match: ['transport', 'commute'], emoji: '🚗', tint: 'bg-sky-500/15 text-sky-300' },
+  { match: ['bill', 'util'], emoji: '💡', tint: 'bg-yellow-500/15 text-yellow-300' },
+  { match: ['shop'], emoji: '🛍️', tint: 'bg-pink-500/15 text-pink-300' },
+  { match: ['health'], emoji: '💊', tint: 'bg-emerald-500/15 text-emerald-300' },
+  { match: ['entertain', 'leisure'], emoji: '🍿', tint: 'bg-violet-500/15 text-violet-300' },
+  { match: ['fee'], emoji: '💳', tint: 'bg-slate-500/20 text-slate-300' },
+]
+
+/** Same helper as the Transactions page. Worth moving to '@/lib/category' and sharing. */
+function categoryMeta(name?: string | null) {
+  const n = (name ?? '').toLowerCase()
+  return (
+    CATEGORY_META.find((m) => m.match.some((k) => n.includes(k))) ?? {
+      emoji: '📁',
+      tint: 'bg-muted text-muted-foreground',
+    }
+  )
+}
+
+const hideScrollbar = '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+
+function useCountUp(target: number, ms = 800) {
+  const [value, setValue] = useState(0)
+  const from = useRef(0)
+  useEffect(() => {
+    const start = performance.now()
+    const a = from.current
+    let raf = 0
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - start) / ms)
+      const v = a + (target - a) * (1 - Math.pow(1 - p, 3))
+      from.current = v
+      setValue(v)
+      if (p < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, ms])
+  return Math.round(value)
+}
+
+function dueLabel(dueAt: number) {
+  const day = 24 * 60 * 60 * 1000
+  const startOf = (t: number) => new Date(new Date(t).setHours(0, 0, 0, 0)).getTime()
+  const d = Math.round((startOf(dueAt) - startOf(Date.now())) / day)
+  if (d < 0) return { text: `${-d} ${-d === 1 ? 'day' : 'days'} overdue`, tone: 'late' as const }
+  if (d === 0) return { text: 'Due today', tone: 'soon' as const }
+  if (d === 1) return { text: 'Tomorrow', tone: 'soon' as const }
+  return { text: `In ${d} days`, tone: 'ok' as const }
+}
+
+const toneClass = {
+  late: 'bg-rose-500/15 text-rose-300',
+  soon: 'bg-amber-500/15 text-amber-300',
+  ok: 'bg-muted text-muted-foreground',
+}
+
+/* ───────────────────────── layout primitives ───────────────────────── */
+
+function Section({
+  title,
+  aside,
+  children,
+}: {
+  title: string
+  aside?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-baseline justify-between px-1">
+        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+        {aside && <div className="text-xs text-muted-foreground">{aside}</div>}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+const panel = 'rounded-3xl border border-border bg-card p-4'
+
+/* ───────────────────────────── page ───────────────────────────── */
 
 export function DashboardPage() {
   const [rangeDays, setRangeDays] = useState(30)
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null)
+
   const dashboard = useQuery({
     queryKey: [...queryKeys.dashboard, rangeDays],
     queryFn: () => LocalExpense.getDashboard({ rangeDays }),
@@ -42,7 +122,11 @@ export function DashboardPage() {
   const forecast = useQuery({ queryKey: ['forecast'], queryFn: () => LocalExpense.getForecast() })
   const commitments = useQuery({ queryKey: ['commitments'], queryFn: () => LocalExpense.listCommitments() })
   const goals = useQuery({ queryKey: ['goals'], queryFn: () => LocalExpense.listGoals() })
-  const listener = useQuery({ queryKey: queryKeys.listener, queryFn: () => LocalExpense.getListenerStatus(), refetchInterval: 15_000 })
+  const listener = useQuery({
+    queryKey: queryKeys.listener,
+    queryFn: () => LocalExpense.getListenerStatus(),
+    refetchInterval: 15_000,
+  })
   const recentTxns = useQuery({
     queryKey: ['recentTransactions'],
     queryFn: () => LocalExpense.listTransactions({ limit: 20 }),
@@ -53,16 +137,23 @@ export function DashboardPage() {
   const data = dashboard.data
   if (!data) {
     return (
-      <div className="mx-auto max-w-lg px-4 pt-6">
-        <p className="text-sm text-muted-foreground">The dashboard could not be loaded.</p>
+      <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="text-lg font-semibold">The dashboard didn't load</p>
+        <p className="text-sm text-muted-foreground">Your data is safe on this device. Try loading it again.</p>
+        <Button onClick={() => void dashboard.refetch()}>Try again</Button>
       </div>
     )
   }
 
+  const listenerState = listener.data?.state ?? 'UNKNOWN'
   const isEmpty = data.accounts.length === 0 && data.topMerchants.length === 0
+  const cmts = commitments.data?.commitments ?? []
+  const recent = (recentTxns.data?.items ?? [])
+    .filter((t) => !selectedAccount || t.accountId === selectedAccount)
+    .slice(0, 6)
 
   return (
-    <div className="mx-auto block h-full max-w-lg space-y-4 overflow-y-auto px-4 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-6">
+    <div className="h-full overflow-y-auto">
       {/* Legacy strings kept for compatibility with existing tests */}
       <span className="sr-only">Total balance</span>
       <span className="sr-only">Spending rate</span>
@@ -73,797 +164,1141 @@ export function DashboardPage() {
       <span className="sr-only">Safe to spend</span>
       <span className="sr-only">Runway</span>
 
-      {isEmpty ? (
-        <FirstRunCard />
-      ) : (
-        <>
-          <HeaderSection
-            listenerState={listener.data?.state ?? 'UNKNOWN'}
-            needsReview={data.needsReview}
-            rangeDays={rangeDays}
-            setRangeDays={setRangeDays}
-            selectedAccount={selectedAccount}
-            setSelectedAccount={setSelectedAccount}
-            accounts={data.accounts}
-          />
-          <HeroCard data={data} selectedAccount={selectedAccount} />
-          {data.needsReview > 0 && <NeedsAttentionSection needsReview={data.needsReview} commitments={commitments.data?.commitments ?? []} />}
-          <BudgetSection data={data} />
-          <CategorySection data={data} />
-          <TrendSection data={data} />
-          {forecast.data && <ForecastSection forecast={forecast.data} />}
-          <CommitmentsSection commitments={commitments.data?.commitments ?? []} />
-          <MerchantsSection data={data} />
-          <GoalsSection goals={goals.data?.goals ?? []} />
-          <AccountsSection data={data} />
-          <InsightsSection data={data} />
-          <PatternsSection />
-          <RecentTransactionsSection transactions={(recentTxns.data?.items ?? []).filter((t) => !selectedAccount || t.accountId === selectedAccount).slice(0, 6)} />
-        </>
-      )}
+      <div className="mx-auto max-w-lg">
+        <Header
+          listenerState={listenerState}
+          rangeDays={rangeDays}
+          setRangeDays={setRangeDays}
+          accounts={isEmpty ? [] : data.accounts}
+          selectedAccount={selectedAccount}
+          setSelectedAccount={setSelectedAccount}
+        />
 
-      <p className="pt-1 text-center text-[0.7rem] text-muted-foreground">
-        Figures updated {formatRelativeTime(data.lastUpdatedAt)}
+        <div className="space-y-7 px-4 pb-10 pt-2">
+          {isEmpty ? (
+            <FirstRunCard listenerState={listenerState} />
+          ) : (
+            <>
+              <BalanceHero data={data} selectedAccount={selectedAccount} />
+
+              <Attention needsReview={data.needsReview} commitments={cmts} />
+
+              {data.categories.length > 0 && (
+                <Section title="Where it went" aside={formatMinor(data.categories.reduce((s, c) => s + c.spendMinor, 0))}>
+                  <SpendingCard categories={data.categories} />
+                </Section>
+              )}
+
+              {data.cashflow.length > 1 && (
+                <Section title="Spending trend">
+                  <TrendCard cashflow={data.cashflow} />
+                </Section>
+              )}
+
+              <Section title="Spending patterns">
+                <PatternsCard selectedAccount={selectedAccount} />
+              </Section>
+
+              {forecast.data && forecast.data.points.length > 1 && (
+                <Section title="Where your balance is heading">
+                  <ForecastCard forecast={forecast.data} />
+                </Section>
+              )}
+
+              {cmts.length > 0 && (
+                <Section title="Coming up" aside={`${formatMinor(cmts.reduce((s, c) => s + c.amountMinor, 0))} due`}>
+                  <BillsCard commitments={cmts} />
+                </Section>
+              )}
+
+              {(goals.data?.goals.length ?? 0) > 0 && (
+                <Section
+                  title="Savings goals"
+                  aside={
+                    <Link to="/goals" className="font-medium text-indigo-400">
+                      New goal
+                    </Link>
+                  }
+                >
+                  <GoalsCard goals={goals.data!.goals} />
+                </Section>
+              )}
+
+              {data.topMerchants.length > 0 && (
+                <Section title="Top merchants">
+                  <MerchantsCard merchants={data.topMerchants} />
+                </Section>
+              )}
+
+              {data.accounts.length > 0 && (
+                <Section title="Accounts" aside="Tap to filter">
+                  <AccountsRow
+                    accounts={data.accounts}
+                    selected={selectedAccount}
+                    onSelect={(id) => setSelectedAccount((cur) => (cur === id ? null : id))}
+                  />
+                </Section>
+              )}
+
+              {data.savings.items.length > 0 && (
+                <Section title="Ideas to save">
+                  <InsightsCard items={data.savings.items} />
+                </Section>
+              )}
+
+              {recent.length > 0 && (
+                <Section
+                  title="Recent activity"
+                  aside={
+                    <Link to="/transactions" className="font-medium text-indigo-400">
+                      See all
+                    </Link>
+                  }
+                >
+                  <RecentCard transactions={recent} />
+                </Section>
+              )}
+            </>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              void dashboard.refetch()
+              void recentTxns.refetch()
+            }}
+            className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground active:text-foreground"
+          >
+            <RefreshCw className={cn('size-3', dashboard.isFetching && 'animate-spin')} />
+            Updated {formatRelativeTime(data.lastUpdatedAt)}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ───────────────────────────── header ───────────────────────────── */
+
+function Header({
+  listenerState,
+  rangeDays,
+  setRangeDays,
+  accounts,
+  selectedAccount,
+  setSelectedAccount,
+}: {
+  listenerState: string
+  rangeDays: number
+  setRangeDays: (v: number) => void
+  accounts: { id: string; name: string }[]
+  selectedAccount: string | null
+  setSelectedAccount: (v: string | null) => void
+}) {
+  const connected = listenerState === 'CONNECTED'
+  const unknown = listenerState === 'UNKNOWN'
+  const pill = (
+    <span
+      className={cn(
+        'flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs',
+        connected
+          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+          : unknown
+            ? 'border-border bg-card text-muted-foreground'
+            : 'border-rose-500/40 bg-rose-500/10 text-rose-300',
+      )}
+    >
+      <span className={cn('size-1.5 rounded-full', connected ? 'bg-emerald-400' : unknown ? 'bg-muted-foreground' : 'bg-rose-400')} />
+      {connected ? 'Listening' : unknown ? 'Checking' : 'Not listening'}
+    </span>
+  )
+
+  return (
+    <header className="sticky top-0 z-20 space-y-3 bg-background/85 px-4 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-xl">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="flex size-9 items-center justify-center rounded-2xl bg-indigo-500 text-white">
+            <Sparkle size={18} />
+          </div>
+          <div>
+            <p className="font-display text-lg font-bold leading-tight tracking-tight">Finxeity</p>
+            <p className="text-xs text-muted-foreground">Welcome back</p>
+          </div>
+        </div>
+        {connected || unknown ? pill : <Link to="/settings">{pill}</Link>}
+      </div>
+
+      <div className={cn('-mx-4 flex gap-2 overflow-x-auto px-4', hideScrollbar)}>
+        {PERIODS.map((p) => (
+          <Pill key={p.days} active={rangeDays === p.days} onClick={() => setRangeDays(p.days)}>
+            {p.label}
+          </Pill>
+        ))}
+        {accounts.length > 1 && (
+          <>
+            <span className="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden />
+            <Pill active={selectedAccount === null} onClick={() => setSelectedAccount(null)}>
+              All accounts
+            </Pill>
+            {accounts.map((a) => (
+              <Pill key={a.id} active={selectedAccount === a.id} onClick={() => setSelectedAccount(a.id)}>
+                {a.name}
+              </Pill>
+            ))}
+          </>
+        )}
+      </div>
+    </header>
+  )
+}
+
+function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'h-8 shrink-0 rounded-full border px-3 text-xs font-medium transition-colors',
+        active
+          ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200'
+          : 'border-border bg-card text-muted-foreground active:bg-muted',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+/* ───────────────────────────── first run ───────────────────────────── */
+
+function FirstRunCard({ listenerState }: { listenerState: string }) {
+  const connected = listenerState === 'CONNECTED'
+  return (
+    <div className="space-y-5 rounded-3xl border border-indigo-500/30 bg-card p-5">
+      <div className="space-y-1.5">
+        <h1 className="font-display text-2xl font-bold tracking-tight">Welcome to Finxeity</h1>
+        <p className="text-sm text-muted-foreground">
+          Private financial clarity. No cloud relays and no bank passwords.
+        </p>
+      </div>
+      <ol className="space-y-2.5">
+        <li className="flex items-center gap-3 rounded-2xl bg-muted/50 p-3">
+          <span className="flex size-8 items-center justify-center rounded-full bg-indigo-500/20 text-sm font-semibold text-indigo-300">1</span>
+          <div className="flex-1">
+            <p className="text-sm font-medium">Allow notification access</p>
+            <p className="text-xs text-muted-foreground">Lets the app read bank alerts as they arrive.</p>
+          </div>
+          {connected ? (
+            <span className="flex items-center gap-1 text-xs font-medium text-emerald-300">
+              <Check className="size-3.5" /> Done
+            </span>
+          ) : (
+            <Button size="sm" variant="outline" asChild>
+              <Link to="/settings">Enable</Link>
+            </Button>
+          )}
+        </li>
+        <li className="flex items-center gap-3 rounded-2xl bg-muted/50 p-3">
+          <span className="flex size-8 items-center justify-center rounded-full bg-indigo-500/20 text-sm font-semibold text-indigo-300">2</span>
+          <div className="flex-1">
+            <p className="text-sm font-medium">Import past bank SMS</p>
+            <p className="text-xs text-muted-foreground">Optional. Fills in your history.</p>
+          </div>
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/settings">Scan SMS</Link>
+          </Button>
+        </li>
+      </ol>
+      <Button className="h-12 w-full text-base" asChild>
+        <Link to="/onboarding">Explore with sample data</Link>
+      </Button>
+    </div>
+  )
+}
+
+/* ───────────────────────────── balance hero ─────────────────────────────
+   The one showy element: a pacing gauge. The arc fills with this month's
+   spend against the cap, a tick marks where an even pace would put you, and
+   the centre shows what's safe to spend today.                             */
+
+const ARC_R = 100
+const ARC_LEN = Math.PI * ARC_R
+
+function BalanceHero({ data, selectedAccount }: { data: Dashboard; selectedAccount: string | null }) {
+  const account = data.accounts.find((a) => a.id === selectedAccount)
+  const balance = account?.derivedBalanceMinor ?? data.totalBalanceMinor
+  const shownBalance = useCountUp(balance)
+  const income = data.cashflow.reduce((sum, p) => sum + p.incomeMinor, 0)
+  const spend = data.burn.monthlyMinor
+
+  const now = new Date()
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const pace = now.getDate() / daysInMonth
+  const daysLeft = daysInMonth - now.getDate()
+  const pct = Math.min(1, spend / MONTHLY_CAP_MINOR)
+
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setReady(true))
+    return () => cancelAnimationFrame(id)
+  }, [])
+
+  const status =
+    pct <= pace
+      ? { text: 'Under pace', cls: 'bg-emerald-500/15 text-emerald-300', stroke: 'text-emerald-400' }
+      : pct <= pace + 0.1
+        ? { text: 'Slightly ahead of pace', cls: 'bg-amber-500/15 text-amber-300', stroke: 'text-amber-400' }
+        : { text: 'Ahead of pace', cls: 'bg-rose-500/15 text-rose-300', stroke: 'text-rose-400' }
+
+  // Position of the even-pace tick on the arc.
+  const a = Math.PI * pace
+  const tick = (r: number) => ({ x: 120 - r * Math.cos(a), y: 120 - r * Math.sin(a) })
+  const t1 = tick(ARC_R - 14)
+  const t2 = tick(ARC_R + 14)
+
+  const safe = data.safeToSpend
+
+  return (
+    <section className="overflow-hidden rounded-3xl border border-border bg-card">
+      <div className="px-5 pt-5">
+        <p className="text-sm text-muted-foreground">{account ? account.name : 'Total balance'}</p>
+        <p className="font-display mt-1 text-4xl font-bold tracking-tight tabular-nums">{formatMinor(shownBalance)}</p>
+      </div>
+
+      <div className="relative mx-auto mt-2 w-full max-w-[19rem] px-4">
+        <svg viewBox="0 0 240 134" className="w-full overflow-visible" role="img" aria-label={`${Math.round(pct * 100)}% of the monthly cap used`}>
+          <path d="M20,120 A100,100 0 0 1 220,120" fill="none" strokeWidth="14" strokeLinecap="round" className="stroke-muted" />
+          <path
+            d="M20,120 A100,100 0 0 1 220,120"
+            fill="none"
+            strokeWidth="14"
+            strokeLinecap="round"
+            stroke="currentColor"
+            className={cn(status.stroke, 'transition-[stroke-dashoffset] duration-1000 ease-out motion-reduce:transition-none')}
+            strokeDasharray={ARC_LEN}
+            strokeDashoffset={ready ? ARC_LEN * (1 - pct) : ARC_LEN}
+          />
+          <line x1={t1.x} y1={t1.y} x2={t2.x} y2={t2.y} stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="text-foreground/70" />
+        </svg>
+        <div className="absolute inset-x-0 bottom-0 flex flex-col items-center pb-0.5">
+          <p className="text-xs text-muted-foreground">{safe ? 'Safe to spend today' : 'Spent so far'}</p>
+          <p className="font-display text-3xl font-bold tabular-nums leading-tight">
+            {formatMinor(safe ? safe.todayMinor : spend)}
+          </p>
+          {safe && <p className="text-xs text-muted-foreground">{formatMinor(safe.weekMinor)} this week</p>}
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-col items-center gap-1.5 px-5">
+        <span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', status.cls)}>{status.text}</span>
+        <p className="text-center text-xs text-muted-foreground">
+          {formatMinor(spend)} of {formatMinor(MONTHLY_CAP_MINOR)} used, {daysLeft} {daysLeft === 1 ? 'day' : 'days'} left. The tick marks an even pace.
+        </p>
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 divide-x divide-border border-t border-border">
+        <Stat icon={<ArrowDownLeft className="size-3.5" />} tone="text-emerald-400 bg-emerald-500/15" label="Income" value={income} />
+        <Stat icon={<ArrowUpRight className="size-3.5" />} tone="text-rose-400 bg-rose-500/15" label="Spent" value={spend} sub={`over ${data.burn.daysCounted} days`} />
+      </div>
+    </section>
+  )
+}
+
+function Stat({ icon, tone, label, value, sub }: { icon: React.ReactNode; tone: string; label: string; value: number; sub?: string }) {
+  const shown = useCountUp(value)
+  return (
+    <div className="flex items-center gap-3 px-5 py-4">
+      <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-full', tone)}>{icon}</span>
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">{sub ? `${label}, ${sub}` : label}</p>
+        <p className="truncate text-base font-semibold tabular-nums">{formatMinor(shown)}</p>
+      </div>
+    </div>
+  )
+}
+
+/* ─────────────────────────── needs attention ─────────────────────────── */
+
+function Attention({ needsReview, commitments }: { needsReview: number; commitments: Commitment[] }) {
+  const due = commitments
+    .filter((c) => c.status === 'OVERDUE' || c.status === 'PENDING')
+    .slice(0, 2)
+  if (needsReview === 0 && due.length === 0) return null
+  return (
+    <Section title="Needs attention">
+      <div className={cn('-mx-4 flex gap-3 overflow-x-auto px-4 pb-1', hideScrollbar)}>
+        {needsReview > 0 && (
+          <Link
+            to="/review"
+            className="flex w-60 shrink-0 items-center gap-3 rounded-3xl border border-amber-500/30 bg-amber-500/10 p-4 active:bg-amber-500/15"
+          >
+            <span className="flex size-10 items-center justify-center rounded-2xl bg-amber-500/20 text-amber-300">
+              <BellRing className="size-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold">
+                {needsReview} {needsReview === 1 ? 'transaction needs' : 'transactions need'} a look
+              </p>
+              <p className="text-xs text-amber-300">Review and categorise</p>
+            </div>
+          </Link>
+        )}
+        {due.map((c) => {
+          const label = dueLabel(c.dueAt)
+          return (
+            <div key={c.id} className="flex w-60 shrink-0 items-center justify-between gap-3 rounded-3xl border border-border bg-card p-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{c.name}</p>
+                <span className={cn('mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium', toneClass[label.tone])}>
+                  {label.text}
+                </span>
+              </div>
+              <p className="shrink-0 text-sm font-semibold tabular-nums">{formatMinor(c.amountMinor)}</p>
+            </div>
+          )
+        })}
+      </div>
+    </Section>
+  )
+}
+
+/* ───────────────────────────── spending ───────────────────────────── */
+
+function SpendingCard({ categories }: { categories: Dashboard['categories'] }) {
+  const [active, setActive] = useState<number | null>(null)
+
+  const slices = useMemo(() => {
+    const sorted = [...categories].sort((a, b) => b.spendMinor - a.spendMinor)
+    const top = sorted.slice(0, 5)
+    const rest = sorted.slice(5).reduce((s, c) => s + c.spendMinor, 0)
+    const rows = top.map((c) => ({ key: c.categoryId ?? c.name, name: c.name, value: c.spendMinor }))
+    if (rest > 0) rows.push({ key: 'other', name: 'Everything else', value: rest })
+    return rows
+  }, [categories])
+
+  const total = slices.reduce((s, r) => s + r.value, 0) || 1
+  let offset = 0
+  const GAP = 0.8
+
+  const focus = active != null ? slices[active] : null
+
+  return (
+    <div className={panel}>
+      <div className="flex items-center gap-4">
+        <div className="relative size-36 shrink-0">
+          <svg viewBox="0 0 36 36" className="size-full -rotate-90">
+            <circle cx="18" cy="18" r="15.9155" fill="none" strokeWidth="4" className="stroke-muted" />
+            {slices.map((s, i) => {
+              const len = (s.value / total) * 100
+              const dash = Math.max(0, len - GAP)
+              const el = (
+                <circle
+                  key={s.key}
+                  cx="18"
+                  cy="18"
+                  r="15.9155"
+                  fill="none"
+                  strokeWidth={active === i ? 5 : 4}
+                  stroke={SLICE_COLORS[i % SLICE_COLORS.length]}
+                  strokeDasharray={`${dash} ${100 - dash}`}
+                  strokeDashoffset={-offset}
+                  className="cursor-pointer transition-all duration-200"
+                  opacity={active == null || active === i ? 1 : 0.3}
+                  onClick={() => setActive(active === i ? null : i)}
+                />
+              )
+              offset += len
+              return el
+            })}
+          </svg>
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-5 text-center">
+            <span className="max-w-full truncate text-xs text-muted-foreground">{focus ? focus.name : 'Total'}</span>
+            <span className="text-base font-bold tabular-nums">{formatMinor(focus ? focus.value : total)}</span>
+            {focus && <span className="text-xs text-muted-foreground">{Math.round((focus.value / total) * 100)}%</span>}
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">Tap a slice or a row to focus on one category.</p>
+      </div>
+
+      <ul className="mt-4 divide-y divide-border/60">
+        {slices.map((s, i) => {
+          const pct = Math.round((s.value / total) * 100)
+          const meta = categoryMeta(s.name)
+          return (
+            <li key={s.key}>
+              <button
+                type="button"
+                onClick={() => setActive(active === i ? null : i)}
+                className={cn('flex w-full items-center gap-3 py-2.5 text-left transition-opacity', active != null && active !== i && 'opacity-40')}
+              >
+                <span className={cn('flex size-9 shrink-0 items-center justify-center rounded-xl text-lg', meta.tint)}>
+                  {s.key === 'other' ? '…' : meta.emoji}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{s.name}</span>
+                    <span className="shrink-0 text-sm font-semibold tabular-nums">{formatMinor(s.value)}</span>
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: SLICE_COLORS[i % SLICE_COLORS.length] }} />
+                    </div>
+                    <span className="w-8 text-right text-xs text-muted-foreground tabular-nums">{pct}%</span>
+                  </div>
+                </div>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+/* ───────────────────────────── trend ───────────────────────────── */
+
+function TrendCard({ cashflow }: { cashflow: Dashboard['cashflow'] }) {
+  const points = cashflow.slice(-14)
+  const [active, setActive] = useState<number | null>(null)
+  const max = Math.max(...points.map((p) => p.spendMinor), 1)
+  const mean = points.reduce((s, p) => s + p.spendMinor, 0) / points.length
+  const daily = points.length > 1 && points[1].periodStart - points[0].periodStart < 20 * 24 * 60 * 60 * 1000
+  const label = (ts: number) => (daily ? String(new Date(ts).getDate()) : formatMonth(ts).slice(0, 3))
+  const shown = active != null ? points[active] : null
+
+  return (
+    <div className={panel}>
+      <div className="flex items-end justify-between">
+        <div>
+          <p className="text-xs text-muted-foreground">{shown ? label(shown.periodStart) : 'Average'}</p>
+          <p className="text-xl font-semibold tabular-nums">{formatMinor(shown ? shown.spendMinor : Math.round(mean))}</p>
+        </div>
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="size-2 rounded-full bg-rose-400" /> Unusually high
+        </p>
+      </div>
+
+      <div className="relative mt-4 flex h-32 items-end gap-1.5">
+        <div
+          className="pointer-events-none absolute inset-x-0 border-t border-dashed border-muted-foreground/40"
+          style={{ bottom: `${(mean / max) * 100}%` }}
+        />
+        {points.map((p, i) => {
+          const high = p.spendMinor > max * 0.7
+          return (
+            <button
+              key={p.periodStart}
+              type="button"
+              aria-label={`${label(p.periodStart)}: ${formatMinor(p.spendMinor)}`}
+              onClick={() => setActive(active === i ? null : i)}
+              className="flex h-full flex-1 flex-col justify-end"
+            >
+              <div
+                className={cn(
+                  'w-full rounded-t-md transition-all duration-200',
+                  high ? 'bg-rose-400/80' : 'bg-indigo-400/60',
+                  active === i && (high ? 'bg-rose-400' : 'bg-indigo-400'),
+                  active != null && active !== i && 'opacity-50',
+                )}
+                style={{ height: `${Math.max(6, (p.spendMinor / max) * 100)}%` }}
+              />
+            </button>
+          )
+        })}
+      </div>
+      <div className="mt-1.5 flex gap-1.5">
+        {points.map((p) => (
+          <span key={p.periodStart} className="flex-1 text-center text-[0.65rem] text-muted-foreground">
+            {label(p.periodStart)}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ───────────────────────────── forecast ───────────────────────────── */
+
+function ForecastCard({
+  forecast,
+}: {
+  forecast: { points: { dayStart: number; balanceMinor: number }[]; minBalanceMinor: number; endBalanceMinor: number }
+}) {
+  const W = 300
+  const H = 90
+  const pts = forecast.points
+  const lo = Math.min(...pts.map((p) => p.balanceMinor), 0)
+  const hi = Math.max(...pts.map((p) => p.balanceMinor), 1)
+  const x = (i: number) => (i / (pts.length - 1)) * W
+  const y = (v: number) => H - 6 - ((v - lo) / (hi - lo || 1)) * (H - 16)
+  const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.balanceMinor).toFixed(1)}`).join(' ')
+  const area = `${line} L${W},${H} L0,${H} Z`
+  const minIdx = pts.reduce((best, p, i) => (p.balanceMinor < pts[best].balanceMinor ? i : best), 0)
+  const stays = forecast.minBalanceMinor >= 0
+  const color = stays ? '#34d399' : '#fb7185'
+  const zeroY = y(0)
+
+  return (
+    <div className={panel}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs text-muted-foreground">Projected at the end</p>
+          <p className="text-xl font-semibold tabular-nums">{formatMinor(forecast.endBalanceMinor)}</p>
+        </div>
+        <span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', stays ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300')}>
+          {stays ? 'Stays above zero' : 'Dips below zero'}
+        </span>
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} className="mt-3 h-24 w-full overflow-visible" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="fc-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {lo < 0 && <line x1="0" x2={W} y1={zeroY} y2={zeroY} stroke="#fb7185" strokeDasharray="4 4" strokeWidth="1" vectorEffect="non-scaling-stroke" />}
+        <path d={area} fill="url(#fc-fill)" />
+        <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+
+      <p className="mt-2 text-xs text-muted-foreground">
+        Lowest point is <span className="font-medium text-foreground tabular-nums">{formatMinor(forecast.minBalanceMinor)}</span> on{' '}
+        {new Date(pts[minIdx].dayStart).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}.
       </p>
     </div>
   )
 }
 
-function FirstRunCard() {
-  return (
-    <Card className="border-indigo-500/30 bg-gradient-to-br from-indigo-950/60 to-card">
-      <CardHeader>
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-indigo-500/30 bg-indigo-500/20 text-xl text-indigo-400">
-            <Sparkle />
-          </div>
-          <div>
-            <CardTitle>Welcome to Finxeity</CardTitle>
-            <CardDescription>Private financial clarity without cloud relays or bank passwords.</CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 text-xs">
-        <div className="flex items-center justify-between rounded-xl border border-border bg-muted/40 p-2.5">
-          <span className="flex items-center gap-2 text-foreground">
-            <BellRing className="text-indigo-400" size={16} />
-            1. Enable Notification Access
-          </span>
-          <Badge variant="secondary">Granted</Badge>
-        </div>
-        <div className="flex items-center justify-between rounded-xl border border-border bg-muted/40 p-2.5">
-          <span className="flex items-center gap-2 text-foreground">
-            <Receipt className="text-amber-400" size={16} />
-            2. Import Bank SMS (Optional)
-          </span>
-          <Button size="sm" asChild>
-            <Link to="/settings">Scan SMS</Link>
-          </Button>
-        </div>
-        <Button className="w-full" asChild>
-          <Link to="/onboarding">Load Sample Ledger Data</Link>
-        </Button>
-      </CardContent>
-    </Card>
-  )
-}
+/* ───────────────────────────── bills ───────────────────────────── */
 
-function HeaderSection({
-  listenerState,
-  needsReview,
-  rangeDays,
-  setRangeDays,
-  selectedAccount,
-  setSelectedAccount,
-  accounts,
-}: {
-  listenerState: string
-  needsReview: number
-  rangeDays: number
-  setRangeDays: (v: number) => void
-  selectedAccount: string | null
-  setSelectedAccount: (v: string | null) => void
-  accounts: { id: string; name: string }[]
-}) {
-  const periods = [
-    { label: 'This Month', days: 30 },
-    { label: 'Last Month', days: 60 },
-    { label: 'Last 7 Days', days: 7 },
-  ]
+function BillsCard({ commitments }: { commitments: Commitment[] }) {
   return (
-    <section className="space-y-2.5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-md shadow-indigo-500/20">
-            <Sparkle size={18} />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="font-display text-base font-bold tracking-tight">Finxeity</span>
-              <Badge variant="secondary" className="font-mono text-[9px]">v1.2</Badge>
-            </div>
-            <p className="text-[11px] text-muted-foreground">Welcome back</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <select
-            value={selectedAccount ?? ''}
-            onChange={(e) => setSelectedAccount(e.target.value || null)}
-            className="h-7 rounded-xl border border-border bg-card px-2 text-[11px] text-foreground"
-          >
-            <option value="">All Accounts</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-          <Button variant="outline" size="icon" className="h-8 w-8">
-            <ArrowDownRight size={14} />
-          </Button>
-        </div>
-      </div>
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
-          {periods.map((p) => (
-            <button
-              key={p.label}
-              onClick={() => setRangeDays(p.days)}
-              className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ${rangeDays === p.days ? 'bg-indigo-600 text-white shadow-sm' : 'border border-border bg-card text-muted-foreground hover:text-foreground'}`}
-              type="button"
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
-          <span className={`h-1.5 w-1.5 rounded-full ${listenerState === 'CONNECTED' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-          <span>{listenerState === 'CONNECTED' ? '2m ago' : 'Disconnected'}</span>
-        </div>
-      </div>
-      {needsReview > 0 && (
-        <Badge variant="secondary" className="w-fit">{needsReview} to review</Badge>
-      )}
-    </section>
-  )
-}
-
-function HeroCard({ data, selectedAccount }: { data: Dashboard; selectedAccount: string | null }) {
-  const spend = data.burn.monthlyMinor
-  const income = data.cashflow.reduce((sum, p) => sum + p.incomeMinor, 0)
-  const net = data.totalBalanceMinor
-  return (
-    <Card className="relative overflow-hidden border-border bg-gradient-to-b from-muted/80 to-card">
-      <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-indigo-600/15 blur-3xl" />
-      <CardContent className="relative z-10 space-y-4 p-4 sm:p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <span>Total Liquid Vault</span>
-            </div>
-            <div className="mt-1 flex items-baseline gap-2">
-              <h2 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
-              {formatMinor(selectedAccount ? (data.accounts.find((a) => a.id === selectedAccount)?.derivedBalanceMinor ?? data.totalBalanceMinor) : data.totalBalanceMinor)}
-            </h2>
-            </div>
-          </div>
-          <Button variant="outline" size="icon" className="h-9 w-9 rounded-2xl">
-            <Plus size={16} className="text-indigo-400" />
-          </Button>
-        </div>
-        <div className="grid grid-cols-2 gap-3 border-t border-border pt-3.5">
-          <div className="rounded-2xl border border-border bg-background/50 p-2.5">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <ArrowDownRight size={12} className="text-rose-400" /> Spend
-              </span>
-              <span className="text-[10px] text-emerald-400">▼ 8%</span>
-            </div>
-            <p className="mt-1 font-mono text-base font-bold text-rose-400">{formatMinor(spend)}</p>
-            <p className="mt-0.5 text-[9px] text-muted-foreground">{data.burn.daysCounted} days</p>
-          </div>
-          <div className="rounded-2xl border border-border bg-background/50 p-2.5">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <ArrowUpRight size={12} className="text-emerald-400" /> Income
-              </span>
-              <span className="text-[10px] text-muted-foreground">Fixed</span>
-            </div>
-            <p className="mt-1 font-mono text-base font-bold text-emerald-400">{formatMinor(income)}</p>
-            <p className="mt-0.5 text-[9px] text-muted-foreground">Salary on 1st</p>
-          </div>
-        </div>
-        <div className="mt-3.5 flex items-center justify-between rounded-xl border border-indigo-500/20 bg-indigo-950/30 px-3 py-2 text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            <span className="font-medium text-foreground">Net Position:</span>
-            <span className="font-mono font-bold text-emerald-400">{formatMinor(net)}</span>
-          </div>
-          <svg className="h-6 w-24 overflow-visible" viewBox="0 0 100 24">
-            <path d="M0,20 Q15,18 25,12 T50,14 T75,8 T100,4" fill="none" stroke="#6366f1" strokeWidth="2.2" strokeLinecap="round" />
-            <circle cx="100" cy="4" r="3" fill="#10b981" />
-          </svg>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function NeedsAttentionSection({ needsReview, commitments }: { needsReview: number; commitments: Commitment[] }) {
-  const overdue = commitments.filter((c) => c.status === 'OVERDUE' || c.status === 'PENDING')
-  return (
-    <section className="space-y-2">
-      <div className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-1.5">
-          <BellRing size={14} className="text-amber-400" />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Needs Attention</h3>
-          <Badge variant="secondary" className="bg-amber-500/20 text-amber-300">{needsReview + overdue.length}</Badge>
-        </div>
-        <span className="text-[11px] text-muted-foreground">Auto-prioritized</span>
-      </div>
-      <div className="flex gap-2.5 overflow-x-auto pb-1">
-        {needsReview > 0 && (
-          <Card className="w-64 shrink-0 border-amber-500/30 bg-amber-950/20">
-            <CardContent className="p-3">
-              <div className="flex items-center justify-between text-xs">
-                <Badge className="bg-amber-500/20 text-amber-300">Parser</Badge>
-                <span className="text-[10px] text-amber-300/80">{needsReview} items</span>
-              </div>
-              <p className="mt-2 truncate text-xs font-medium text-foreground">Needs review</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">Assign categories</p>
-              <Link to="/review" className="mt-2.5 inline-flex text-[11px] font-semibold text-amber-400">
-                Review in Parser →
-              </Link>
-            </CardContent>
-          </Card>
-        )}
-        {overdue.slice(0, 2).map((c) => (
-          <Card key={c.id} className="w-64 shrink-0 border-rose-500/30 bg-rose-950/20">
-            <CardContent className="p-3">
-              <div className="flex items-center justify-between text-xs">
-                <Badge className="bg-rose-500/20 text-rose-300">Due Soon</Badge>
-                <span className="font-mono text-[10px] text-rose-300">{formatMinor(c.amountMinor)}</span>
-              </div>
-              <p className="mt-2 text-xs font-medium text-foreground">{c.name}</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{new Date(c.dueAt).toLocaleDateString()}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function BudgetSection({ data }: { data: Dashboard }) {
-  const safe = data.safeToSpend
-  const overallPct = data.burn.monthlyMinor > 0 ? Math.min(100, (data.burn.monthlyMinor / 7500000) * 100) : 0
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
-              <PieChart size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Budget & Pacing</CardTitle>
-          </div>
-          <span className="text-[11px] font-medium text-muted-foreground">7 Days Left</span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3.5">
-        {safe && (
-          <div className="flex items-center justify-between rounded-2xl border border-emerald-500/30 bg-gradient-to-r from-emerald-950/30 via-background to-indigo-950/20 p-3.5 safe-glow">
-            <div>
-              <div className="flex items-center gap-1 text-[11px] font-medium text-emerald-300">
-                <span>Safe to Spend Today</span>
-              </div>
-              <p className="mt-0.5 font-mono text-xl font-bold">{formatMinor(safe.todayMinor)}<span className="text-xs font-normal text-muted-foreground">/day</span></p>
-              <p className="mt-0.5 text-[9px] text-muted-foreground">Factored: buffer + upcoming commitments</p>
-            </div>
-            <div className="text-right">
-              <Badge variant="secondary" className="bg-emerald-500/20 text-emerald-300">Pacing OK</Badge>
-              <p className="mt-1 text-[10px] text-muted-foreground">{formatMinor(safe.weekMinor)} this week</p>
-            </div>
-          </div>
-        )}
-        <div className="space-y-1.5 pt-1">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-medium text-foreground">Monthly Cap: ₹75,000</span>
-            <span className="font-mono font-semibold text-foreground">{overallPct.toFixed(1)}% ({formatMinor(data.burn.monthlyMinor)} used)</span>
-          </div>
-          <div className="relative h-3 w-full overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400 transition-all" style={{ width: `${overallPct}%` }} />
-            <div className="absolute top-0 bottom-0 left-[74%] z-10 w-0.5 bg-amber-400/90" />
-          </div>
-          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-            <span>Remaining: <strong className="font-mono text-emerald-400">{formatMinor(Math.max(0, 7500000 - data.burn.monthlyMinor))}</strong></span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Expected pace</span>
-          </div>
-        </div>
-        {data.categories.length > 0 && (
-          <div className="space-y-2 border-t border-border pt-2 text-xs">
-            {data.categories.slice(0, 3).map((cat, index) => {
-              const colors = ['bg-indigo-500', 'bg-emerald-500', 'bg-rose-500']
-              const pct = Math.min(100, (cat.spendMinor / (data.burn.monthlyMinor || 1)) * 100)
-              return (
-                <div key={cat.categoryId ?? cat.name} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className={`flex h-6 w-6 items-center justify-center rounded-lg text-xs ${colors[index]}/20`}>{cat.name.charAt(0)}</span>
-                    <span className="text-foreground">{cat.name}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="font-mono text-foreground">{formatMinor(cat.spendMinor)}</span>
-                    <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-muted">
-                      <div className={`h-full rounded-full ${colors[index]}`} style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function CategorySection({ data }: { data: Dashboard }) {
-  const [viz, setViz] = useState<'donut' | 'bars'>('donut')
-  const total = data.categories.reduce((sum, c) => sum + c.spendMinor, 0) || 1
-  const essential = data.categories.filter((c) => c.name.toLowerCase().includes('rent') || c.name.toLowerCase().includes('grocer')).reduce((s, c) => s + c.spendMinor, 0)
-  const essentialPct = Math.round((essential / total) * 100)
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-purple-500/10 text-purple-400">
-              <PieChart size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Category Breakdown</CardTitle>
-          </div>
-          <div className="flex rounded-lg border border-border bg-muted p-0.5 text-[10px]">
-            <button onClick={() => setViz('donut')} className={`rounded px-2 py-0.5 font-medium ${viz === 'donut' ? 'bg-indigo-600 text-white' : 'text-muted-foreground'}`}>Donut</button>
-            <button onClick={() => setViz('bars')} className={`rounded px-2 py-0.5 font-medium ${viz === 'bars' ? 'bg-indigo-600 text-white' : 'text-muted-foreground'}`}>Bars</button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="rounded-xl border border-border bg-muted/40 p-2.5">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="flex items-center gap-1.5 text-foreground"><span className="h-2 w-2 rounded-full bg-emerald-400" /> Essential ({essentialPct}%)</span>
-            <span className="flex items-center gap-1.5 text-muted-foreground"><span className="h-2 w-2 rounded-full bg-purple-400" /> Discretionary ({100 - essentialPct}%)</span>
-          </div>
-          <div className="mt-1.5 flex h-2 w-full overflow-hidden rounded-full bg-muted">
-            <div className="h-full bg-emerald-500" style={{ width: `${essentialPct}%` }} />
-            <div className="h-full bg-purple-500" style={{ width: `${100 - essentialPct}%` }} />
-          </div>
-        </div>
-        {viz === 'donut' ? (
-          <div className="flex items-center justify-around py-2">
-            <div className="relative flex h-32 w-32 items-center justify-center">
-              <svg className="h-full w-full -rotate-90" viewBox="0 0 36 36">
-                <path className="text-muted" strokeWidth="3.5" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                {data.categories.slice(0, 4).map((cat, index) => {
-                  const pct = Math.round((cat.spendMinor / total) * 100)
-                  const offset = data.categories.slice(0, index).reduce((s, c) => s + Math.round((c.spendMinor / total) * 100), 0)
-                  const colors = ['text-emerald-500', 'text-indigo-500', 'text-purple-400', 'text-amber-400']
-                  return (
-                    <path key={cat.categoryId ?? cat.name} className={colors[index]} strokeWidth="3.8" stroke="currentColor" fill="none" strokeLinecap="round" strokeDasharray={`${pct}, 100`} strokeDashoffset={`-${offset}`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                  )
-                })}
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                <span className="text-[10px] font-medium text-muted-foreground">Total</span>
-                <span className="font-mono text-xs font-bold">{formatMinor(total).replace('.00', '')}</span>
-              </div>
-            </div>
-            <div className="space-y-1.5 text-[11px]">
-              {data.categories.slice(0, 4).map((cat, index) => {
-                const colors = ['bg-emerald-500', 'bg-indigo-500', 'bg-purple-400', 'bg-amber-400']
-                const pct = Math.round((cat.spendMinor / total) * 100)
-                return (
-                  <div key={cat.categoryId ?? cat.name} className="flex items-center gap-2">
-                    <span className={`h-2.5 w-2.5 rounded-full ${colors[index]}`} />
-                    <span className="text-muted-foreground">{cat.name} ({pct}%)</span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-2 pt-1 text-xs">
-            {data.categories.slice(0, 3).map((cat, index) => {
-              const pct = Math.round((cat.spendMinor / total) * 100)
-              const colors = ['bg-emerald-500', 'bg-indigo-500', 'bg-purple-400']
-              return (
-                <div key={cat.categoryId ?? cat.name}>
-                  <div className="mb-0.5 flex justify-between text-muted-foreground">
-                    <span>{index + 1}. {cat.name}</span>
-                    <span className="font-mono">{formatMinor(cat.spendMinor)} ({pct}%)</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-muted">
-                    <div className={`h-full rounded-full ${colors[index]}`} style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function TrendSection({ data }: { data: Dashboard }) {
-  const points = data.cashflow.slice(-9)
-  const max = Math.max(...points.map((p) => p.spendMinor), 1)
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400">
-              <ChartLine size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Daily Trend & Outliers</CardTitle>
-          </div>
-          <span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">Recent</span>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="flex h-28 items-end gap-1.5 pt-4 pb-1">
-          {points.map((p) => {
-            const height = Math.max(8, (p.spendMinor / max) * 100)
-            const isOutlier = p.spendMinor > max * 0.7
-            return (
-              <div key={p.periodStart} className="flex flex-1 flex-col items-center justify-end">
-                {isOutlier && <span className="mb-1 h-2 w-2 rounded-full bg-rose-400" />}
-                <div className={`w-full rounded-t ${isOutlier ? 'bg-rose-500/80' : 'bg-indigo-500/60'}`} style={{ height: `${height}%` }} />
-                <span className="mt-1 text-[8px] text-muted-foreground">{formatMonth(p.periodStart).slice(0, 3)}</span>
-              </div>
-            )
-          })}
-        </div>
-        <div className="flex items-center justify-between border-t border-border pt-1 text-[10px] text-muted-foreground">
-          <span>Avg: {formatMinor(data.burn.dailyMinor)}/day</span>
-          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-rose-400" /> Large outlier spend</span>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function ForecastSection({ forecast }: { forecast: { points: { dayStart: number; balanceMinor: number }[]; minBalanceMinor: number; endBalanceMinor: number } }) {
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-500/10 text-teal-400">
-              <TrendingUp size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Cash-Flow Forecast</CardTitle>
-          </div>
-          <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-300">Safe Runway</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <div className="rounded-2xl border border-border bg-muted/40 p-3">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Projected Month-End Balance</span>
-            <span className="font-mono font-bold">{formatMinor(forecast.endBalanceMinor)}</span>
-          </div>
-          <div className="mt-2 h-12 w-full">
-            <svg className="h-full w-full" viewBox="0 0 200 40">
-              <rect x="0" y="28" width="200" height="12" fill="rgba(244,63,94,0.08)" />
-              <line x1="0" y1="28" x2="200" y2="28" stroke="#f43f5e" strokeDasharray="3,3" strokeWidth="0.8" />
-              <path d="M0,8 C50,12 100,16 150,18 L200,22" fill="none" stroke="#10b981" strokeWidth="2" />
-              <circle cx="200" cy="22" r="3" fill="#10b981" />
-            </svg>
-          </div>
-          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-            <span className="text-rose-400/80">Emergency buffer</span>
-            <span className="text-emerald-400">Lowest: {formatMinor(forecast.minBalanceMinor)}</span>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function CommitmentsSection({ commitments }: { commitments: Commitment[] }) {
-  if (commitments.length === 0) return null
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-orange-500/10 text-orange-400">
-              <ChartLine size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Upcoming Bills (14 Days)</CardTitle>
-          </div>
-          <span className="font-mono text-[11px] text-muted-foreground">Total: {formatMinor(commitments.reduce((s, c) => s + c.amountMinor, 0))}</span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-2 text-xs">
-        {commitments.slice(0, 4).map((c) => (
-          <div key={c.id} className="flex items-center justify-between rounded-2xl border border-border bg-muted/40 p-2.5">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-400">
-                <Receipt size={14} />
-              </div>
-              <div>
-                <p className="font-medium text-foreground">{c.name}</p>
-                <p className="text-[10px] text-muted-foreground">{new Date(c.dueAt).toLocaleDateString()}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono font-bold text-foreground">{formatMinor(c.amountMinor)}</span>
-              <Badge variant="secondary" className="text-[9px]">{c.status}</Badge>
-            </div>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  )
-}
-
-function MerchantsSection({ data }: { data: Dashboard }) {
-  if (data.topMerchants.length === 0) return null
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-pink-500/10 text-pink-400">
-              <Receipt size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Top Merchants</CardTitle>
-          </div>
-          <span className="text-[11px] text-muted-foreground">Ranked by spend</span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-2 text-xs">
-        {data.topMerchants.slice(0, 5).map((m, index) => (
-          <div key={m.merchantId ?? m.name} className="flex items-center justify-between rounded-xl bg-muted/40 p-2">
-            <div className="flex items-center gap-2.5">
-              <span className="w-4 font-mono font-bold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
-              <div>
-                <p className="font-medium text-foreground">{m.name}</p>
-                <p className="text-[10px] text-muted-foreground">{m.count} txns</p>
-              </div>
-            </div>
-            <span className="font-mono font-semibold text-foreground">{formatMinor(m.spendMinor)}</span>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  )
-}
-
-function GoalsSection({ goals }: { goals: Goal[] }) {
-  if (goals.length === 0) return null
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
-              <Target size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Savings Goals</CardTitle>
-          </div>
-          <Button variant="link" size="sm" className="h-auto p-0 text-[11px] text-indigo-400" asChild>
-            <Link to="/goals">+ New Goal</Link>
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 text-xs">
-        {goals.slice(0, 3).map((g) => {
-          const pct = g.targetMinor > 0 ? Math.min(100, (g.savedMinor / g.targetMinor) * 100) : 0
+    <div className={cn(panel, 'py-2')}>
+      <ul className="divide-y divide-border/60">
+        {commitments.slice(0, 5).map((c) => {
+          const label = dueLabel(c.dueAt)
           return (
-            <div key={g.id} className="space-y-2 rounded-2xl border border-border bg-muted/40 p-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-foreground">{g.name}</p>
-                  <p className="text-[10px] text-muted-foreground">Target {formatMinor(g.targetMinor)}</p>
-                </div>
-                <Badge variant="secondary" className="bg-emerald-500/20 text-emerald-300">On Track</Badge>
+            <li key={c.id} className="flex items-center gap-3 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{c.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {new Date(c.dueAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+                </p>
               </div>
-              <Progress value={pct} />
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                <span>Saved: <strong className="font-mono text-foreground">{formatMinor(g.savedMinor)}</strong></span>
-                <span>{formatMinor(g.monthlyContributionMinor)}/month</span>
-              </div>
-            </div>
+              <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', toneClass[label.tone])}>{label.text}</span>
+              <span className="w-20 text-right text-sm font-semibold tabular-nums">{formatMinor(c.amountMinor)}</span>
+            </li>
           )
         })}
-      </CardContent>
-    </Card>
+      </ul>
+    </div>
   )
 }
 
-function AccountsSection({ data }: { data: Dashboard }) {
-  if (data.accounts.length === 0) return null
-  return (
-    <section className="space-y-2">
-      <div className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-1.5">
-          <House size={14} className="text-indigo-400" />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Monitored Accounts</h3>
-        </div>
-        <span className="text-[11px] text-muted-foreground">{data.accounts.length} Accounts</span>
-      </div>
-      <div className="flex gap-3 overflow-x-auto pb-1">
-        {data.accounts.map((a) => (
-          <Card key={a.id} className="w-44 shrink-0">
-            <CardContent className="space-y-2 p-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-foreground">{a.name}</span>
-                <span className="font-mono text-[10px] text-muted-foreground">{a.lastDigits ? `..${a.lastDigits}` : ''}</span>
-              </div>
-              <p className="font-mono text-base font-bold">{formatMinor(a.derivedBalanceMinor)}</p>
-              <div className="flex items-center justify-between border-t border-border pt-1.5 text-[10px] text-muted-foreground">
-                <span>Spend</span>
-                <span className="text-emerald-400">Active</span>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    </section>
-  )
-}
+/* ───────────────────────────── goals ───────────────────────────── */
 
-function InsightsSection({ data }: { data: Dashboard }) {
+function GoalsCard({ goals }: { goals: Goal[] }) {
   return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
-              <Lightbulb size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Serene Insights</CardTitle>
-          </div>
-          <span className="text-[10px] text-muted-foreground">{data.savings.items.length} fresh</span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-2.5 text-xs">
-        {data.savings.items.slice(0, 2).map((item, index) => (
-          <div key={item.source + index} className="flex items-start justify-between rounded-2xl border border-border bg-muted/40 p-3">
-            <div className="flex items-start gap-2.5">
-              <Lightbulb size={16} className={index === 0 ? 'text-amber-400' : 'text-emerald-400'} />
-              <div>
-                <p className="font-medium text-foreground">{item.detail}</p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{item.source}</p>
+    <div className="space-y-3">
+      {goals.slice(0, 3).map((g) => {
+        const pct = g.targetMinor > 0 ? Math.min(100, (g.savedMinor / g.targetMinor) * 100) : 0
+        const remaining = Math.max(0, g.targetMinor - g.savedMinor)
+        const months = g.monthlyContributionMinor > 0 ? Math.ceil(remaining / g.monthlyContributionMinor) : null
+        return (
+          <div key={g.id} className={panel}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{g.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatMinor(g.savedMinor)} of {formatMinor(g.targetMinor)}
+                </p>
               </div>
+              <p className="text-2xl font-bold tabular-nums text-emerald-400">{Math.round(pct)}%</p>
             </div>
-          </div>
-        ))}
-        {data.savings.items.length === 0 && (
-          <p className="text-center text-[11px] text-muted-foreground">No insights yet.</p>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function PatternsSection() {
-  const [view, setView] = useState<'weekly' | 'calendar'>('weekly')
-  const [monthOffset, setMonthOffset] = useState(0)
-  const monthDate = new Date()
-  monthDate.setMonth(monthDate.getMonth() + monthOffset)
-  const monthLabel = monthDate.toLocaleString('default', { month: 'long', year: 'numeric' })
-  const days = Array.from({ length: 30 }, () => Math.round(200 + Math.random() * 4000))
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400">
-              <ChartLine size={14} />
+            <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-emerald-400 transition-[width] duration-700" style={{ width: `${pct}%` }} />
             </div>
-            <div>
-              <CardTitle className="text-xs uppercase tracking-wider">Spending Patterns & Capture Ratio</CardTitle>
-              <CardDescription className="text-[10px]">Heatmap & Ingestion efficiency</CardDescription>
-            </div>
-          </div>
-          <div className="flex rounded-lg border border-border bg-muted p-0.5 text-[10px]">
-            <button onClick={() => setView('weekly')} className={`rounded px-2 py-0.5 font-medium ${view === 'weekly' ? 'bg-indigo-600 text-white' : 'text-muted-foreground'}`}>Weekly</button>
-            <button onClick={() => setView('calendar')} className={`rounded px-2 py-0.5 font-medium ${view === 'calendar' ? 'bg-indigo-600 text-white' : 'text-muted-foreground'}`}>Calendar</button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 text-xs">
-        <div className="space-y-1">
-          <div className="flex justify-between text-[11px] text-muted-foreground">
-            <span>Automatic: <strong className="text-emerald-400">94%</strong></span>
-            <span>Manual: 6%</span>
-          </div>
-          <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
-            <div className="h-full bg-emerald-500" style={{ width: '94%' }} />
-            <div className="h-full bg-muted-foreground" style={{ width: '6%' }} />
-          </div>
-        </div>
-        {view === 'weekly' ? (
-          <div className="space-y-1.5 pt-1">
-            <span className="text-[10px] font-medium text-muted-foreground">Weekly Intensity</span>
-            <div className="grid grid-cols-7 gap-1 text-center">
-              {[800, 1200, 400, 1100, 3400, 4200, 3800].map((v, i) => (
-                <div key={i} className="space-y-1">
-                  <div className={`flex h-8 items-center justify-center rounded text-[9px] ${v > 3000 ? 'bg-indigo-500 text-white font-bold' : 'bg-indigo-500/30 text-indigo-300'}`}>₹{v >= 1000 ? (v / 1000).toFixed(1) + 'K' : v}</div>
-                  <span className="text-[9px] text-muted-foreground">{['M', 'T', 'W', 'T', 'F', 'S', 'S'][i]}</span>
-                </div>
-              ))}
-            </div>
-            <p className="text-right text-[9px] text-muted-foreground">Weekend spending is +65% higher than weekdays</p>
-          </div>
-        ) : (
-          <div className="space-y-2 pt-1">
-            <div className="flex items-center justify-between">
-              <button onClick={() => setMonthOffset((m) => m - 1)} className="rounded-lg border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground" type="button">Prev</button>
-              <span className="text-[11px] font-medium text-foreground">{monthLabel}</span>
-              <button onClick={() => setMonthOffset((m) => m + 1)} className="rounded-lg border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground" type="button">Next</button>
-            </div>
-            <div className="grid grid-cols-7 gap-1 text-center">
-              {days.map((v, i) => (
-                <div key={i} className={`flex h-7 items-center justify-center rounded text-[8px] ${v > 3000 ? 'bg-indigo-500 text-white' : v > 1500 ? 'bg-indigo-500/50 text-indigo-200' : 'bg-indigo-500/20 text-indigo-300'}`}>
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function RecentTransactionsSection({ transactions }: { transactions: Transaction[] }) {
-  if (transactions.length === 0) return null
-  return (
-    <Card className="border-border">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
-              <Receipt size={14} />
-            </div>
-            <CardTitle className="text-xs uppercase tracking-wider">Recent Transactions</CardTitle>
-          </div>
-          <Link to="/transactions" className="text-[11px] font-semibold text-indigo-400 hover:underline">See All →</Link>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-2 text-xs">
-        {transactions.map((t) => (
-          <div key={t.id} className="flex items-center justify-between rounded-2xl border border-border bg-muted/40 p-2.5">
-            <div className="flex items-center gap-2.5">
-              <div className={`flex h-8 w-8 items-center justify-center rounded-xl text-sm ${t.direction === 'CREDIT' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                {t.direction === 'CREDIT' ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-              </div>
-              <div>
-                <p className="font-medium text-foreground">{t.merchantName ?? 'Transaction'}</p>
-                <p className="text-[10px] text-muted-foreground">{new Date(t.occurredAt).toLocaleString()}</p>
-              </div>
-            </div>
-            <p className={`font-mono font-bold ${t.direction === 'CREDIT' ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {t.direction === 'CREDIT' ? '+' : '-'}{formatMinor(t.amountMinor)}
+            <p className="mt-2 text-xs text-muted-foreground">
+              {pct >= 100
+                ? 'Goal reached.'
+                : months != null
+                  ? `Putting in ${formatMinor(g.monthlyContributionMinor)} a month, you'll get there in about ${months} ${months === 1 ? 'month' : 'months'}.`
+                  : 'No monthly contribution set yet.'}
             </p>
           </div>
-        ))}
-      </CardContent>
-    </Card>
+        )
+      })}
+    </div>
   )
 }
+
+/* ───────────────────────────── merchants ───────────────────────────── */
+
+function MerchantsCard({ merchants }: { merchants: Dashboard['topMerchants'] }) {
+  const list = merchants.slice(0, 5)
+  const max = Math.max(...list.map((m) => m.spendMinor), 1)
+  return (
+    <div className={cn(panel, 'py-2')}>
+      <ol className="divide-y divide-border/60">
+        {list.map((m, i) => (
+          <li key={m.merchantId ?? m.name} className="py-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="min-w-0 truncate text-sm font-medium">
+                <span className="mr-2 text-muted-foreground tabular-nums">{i + 1}</span>
+                {m.name}
+              </p>
+              <p className="shrink-0 text-sm font-semibold tabular-nums">{formatMinor(m.spendMinor)}</p>
+            </div>
+            <div className="mt-1.5 flex items-center gap-3">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-pink-400/80" style={{ width: `${(m.spendMinor / max) * 100}%` }} />
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {m.count} {m.count === 1 ? 'purchase' : 'purchases'}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+/* ───────────────────────────── accounts ───────────────────────────── */
+
+function AccountsRow({
+  accounts,
+  selected,
+  onSelect,
+}: {
+  accounts: Dashboard['accounts']
+  selected: string | null
+  onSelect: (id: string) => void
+}) {
+  return (
+    <div className={cn('-mx-4 flex gap-3 overflow-x-auto px-4 pb-1', hideScrollbar)}>
+      {accounts.map((a) => {
+        const on = selected === a.id
+        return (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => onSelect(a.id)}
+            aria-pressed={on}
+            className={cn(
+              'w-44 shrink-0 rounded-3xl border p-4 text-left transition-colors active:scale-[0.98]',
+              on ? 'border-indigo-400/70 bg-indigo-500/10' : 'border-border bg-card',
+            )}
+          >
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="truncate font-medium text-foreground">{a.name}</span>
+              {a.lastDigits && <span className="tabular-nums">…{a.lastDigits}</span>}
+            </div>
+            <p className="mt-3 text-lg font-semibold tabular-nums">{formatMinor(a.derivedBalanceMinor)}</p>
+            <p className={cn('mt-1 text-xs', on ? 'text-indigo-300' : 'text-muted-foreground')}>
+              {on ? 'Filtering the dashboard' : 'Tap to filter'}
+            </p>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ───────────────────────────── insights ───────────────────────────── */
+
+function InsightsCard({ items }: { items: Dashboard['savings']['items'] }) {
+  return (
+    <div className={cn(panel, 'py-2')}>
+      <ul className="divide-y divide-border/60">
+        {items.slice(0, 3).map((item, i) => (
+          <li key={item.source + i} className="flex items-start gap-3 py-3">
+            <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-300">
+              <Lightbulb className="size-4" />
+            </span>
+            <div>
+              <p className="text-sm font-medium">{item.detail}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{item.source}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/* ───────────────────────────── recent ───────────────────────────── */
+
+function RecentCard({ transactions }: { transactions: Transaction[] }) {
+  return (
+    <div className={cn(panel, 'py-2')}>
+      <ul className="divide-y divide-border/60">
+        {transactions.map((t) => {
+          const credit = t.direction === 'CREDIT'
+          const meta = categoryMeta(t.categoryName)
+          return (
+            <li key={t.id} className="flex items-center gap-3 py-3">
+              <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-2xl text-lg', meta.tint)}>{meta.emoji}</span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{t.merchantName ?? 'Unknown merchant'}</p>
+                <p className="text-xs text-muted-foreground">{formatRelativeTime(t.occurredAt)}</p>
+              </div>
+              <p className={cn('shrink-0 text-sm font-semibold tabular-nums', credit && 'text-emerald-400')}>
+                {credit ? '+' : '−'}
+                {formatMinor(t.amountMinor)}
+              </p>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+/* ───────────────────────────── skeleton ───────────────────────────── */
 
 function DashboardSkeleton() {
   return (
-    <div className="mx-auto block h-full max-w-lg space-y-4 overflow-y-auto px-4 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-6">
-      <Skeleton className="h-10 w-2/3" />
-      <Skeleton className="h-40 w-full" />
-      <Skeleton className="h-24 w-full" />
-      <Skeleton className="h-24 w-full" />
+    <div className="mx-auto h-full max-w-lg space-y-5 overflow-y-auto px-4 pb-6 pt-[calc(1rem+env(safe-area-inset-top))]">
+      <div className="flex items-center gap-2.5">
+        <Skeleton className="size-9 rounded-2xl" />
+        <Skeleton className="h-8 w-32" />
+      </div>
+      <div className="flex gap-2">
+        <Skeleton className="h-8 w-20 rounded-full" />
+        <Skeleton className="h-8 w-20 rounded-full" />
+        <Skeleton className="h-8 w-20 rounded-full" />
+      </div>
+      <Skeleton className="h-96 w-full rounded-3xl" />
+      <Skeleton className="h-56 w-full rounded-3xl" />
+      <Skeleton className="h-40 w-full rounded-3xl" />
     </div>
   )
+}
+
+/* ───────────────────────── spending patterns ─────────────────────────
+   Built from real debit transactions (no sample data). Two views:
+   • Week rhythm: average spend per weekday
+   • Calendar: spend per day for any month, tap a day for details        */
+
+const DAY_MS = 24 * 60 * 60 * 1000
+const DEBITS: TransactionFilters = { status: 'ACTIVE', direction: 'DEBIT', categoryId: null }
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+// index 0 = no spend, 1 to 4 = increasing intensity
+const HEAT = [
+  'bg-muted/60 text-muted-foreground',
+  'bg-indigo-500/20 text-indigo-200',
+  'bg-indigo-500/40 text-indigo-100',
+  'bg-indigo-500/70 text-white',
+  'bg-indigo-500 text-white',
+]
+
+const compactFmt = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+const compactMinor = (minor: number) => compactFmt.format(minor / 100)
+const startOfDay = (t: number) => new Date(new Date(t).setHours(0, 0, 0, 0)).getTime()
+const dayKey = (t: number) => {
+  const d = new Date(t)
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+}
+const mondayIndex = (d: Date) => (d.getDay() + 6) % 7
+
+function heatLevel(value: number, max: number) {
+  if (value <= 0 || max <= 0) return 0
+  const r = Math.sqrt(value / max) // sqrt keeps one big day from washing out the rest
+  return r > 0.8 ? 4 : r > 0.55 ? 3 : r > 0.3 ? 2 : 1
+}
+
+async function fetchDebits(from: number, to: number): Promise<Transaction[]> {
+  const out: Transaction[] = []
+  let cursor: { occurredAt: number; id: string } | null = null
+  for (let i = 0; i < 30; i++) {
+    const page = await LocalExpense.listTransactions({
+      status: DEBITS.status,
+      direction: DEBITS.direction,
+      categoryId: null,
+      from,
+      to,
+      cursor,
+      limit: 200,
+    })
+    out.push(...page.items)
+    if (!page.nextCursor) break
+    cursor = page.nextCursor
+  }
+  return out
+}
+
+function PatternsCard({ selectedAccount }: { selectedAccount: string | null }) {
+  const [view, setView] = useState<'week' | 'month'>('week')
+  return (
+    <div className={panel}>
+      <div className="mb-4 flex gap-2">
+        <Pill active={view === 'week'} onClick={() => setView('week')}>
+          Week rhythm
+        </Pill>
+        <Pill active={view === 'month'} onClick={() => setView('month')}>
+          Calendar
+        </Pill>
+      </div>
+      {view === 'week' ? <WeekRhythm selectedAccount={selectedAccount} /> : <MonthCalendar selectedAccount={selectedAccount} />}
+    </div>
+  )
+}
+
+function HeatLegend() {
+  return (
+    <div className="flex items-center justify-end gap-1.5 text-[0.7rem] text-muted-foreground">
+      Less
+      {HEAT.map((cls, i) => (
+        <span key={i} className={cn('size-3.5 rounded', cls.split(' ')[0])} />
+      ))}
+      More
+    </div>
+  )
+}
+
+function WeekRhythm({ selectedAccount }: { selectedAccount: string | null }) {
+  const windowStart = useMemo(() => startOfDay(Date.now() - 83 * DAY_MS), [])
+  const q = useQuery({
+    queryKey: ['transactions', 'spendByDay', 'week', windowStart],
+    queryFn: () => fetchDebits(windowStart, Date.now()),
+    staleTime: 60_000,
+  })
+
+  const stats = useMemo(() => {
+    const txns = (q.data ?? []).filter((t) => !selectedAccount || t.accountId === selectedAccount)
+    if (txns.length === 0) return null
+    const now = Date.now()
+    // Count each weekday from the first day we have data, so new users aren't diluted by empty weeks.
+    const first = Math.max(windowStart, startOfDay(Math.min(...txns.map((t) => t.occurredAt))))
+    const counts = Array<number>(7).fill(0)
+    const cursor = new Date(first)
+    let days = 0
+    while (cursor.getTime() <= now) {
+      counts[mondayIndex(cursor)]++
+      cursor.setDate(cursor.getDate() + 1)
+      days++
+    }
+    const totals = Array<number>(7).fill(0)
+    for (const t of txns) totals[mondayIndex(new Date(t.occurredAt))] += t.amountMinor
+    const avg = totals.map((v, i) => v / Math.max(1, counts[i]))
+    const mean = (xs: number[]) => xs.reduce((s, v) => s + v, 0) / xs.length
+    return {
+      avg,
+      max: Math.max(...avg),
+      peak: avg.indexOf(Math.max(...avg)),
+      weekday: mean(avg.slice(0, 5)),
+      weekend: mean(avg.slice(5)),
+      days,
+    }
+  }, [q.data, selectedAccount, windowStart])
+
+  if (q.isLoading) return <Skeleton className="h-36 w-full rounded-2xl" />
+  if (q.isError) return <p className="py-6 text-center text-sm text-muted-foreground">Couldn't load spending patterns.</p>
+  if (!stats) return <p className="py-6 text-center text-sm text-muted-foreground">No spending in the last 12 weeks yet.</p>
+
+  const diff = stats.weekday > 0 ? Math.round((stats.weekend / stats.weekday - 1) * 100) : null
+  const insight =
+    diff == null
+      ? null
+      : Math.abs(diff) < 10
+        ? 'Weekends and weekdays look about the same.'
+        : diff > 0
+          ? `Weekend days run ${diff}% higher than weekdays.`
+          : `Weekend days run ${-diff}% lower than weekdays.`
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="text-xs text-muted-foreground">Average spend per day</p>
+        <p className="text-sm text-muted-foreground">
+          Based on your last {stats.days} {stats.days === 1 ? 'day' : 'days'}
+        </p>
+      </div>
+      <div className="grid grid-cols-7 gap-1.5">
+        {stats.avg.map((v, i) => (
+          <div key={i} className="space-y-1.5 text-center">
+            <div
+              className={cn(
+                'flex h-16 items-center justify-center rounded-xl text-xs font-semibold tabular-nums',
+                HEAT[heatLevel(v, stats.max)],
+                i === stats.peak && 'ring-2 ring-indigo-300/70',
+              )}
+              title={formatMinor(Math.round(v))}
+            >
+              {v > 0 ? compactMinor(v) : '–'}
+            </div>
+            <span className="text-[0.7rem] text-muted-foreground">{WEEKDAYS[i]}</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-sm">
+        <span className="font-medium">{WEEKDAYS[stats.peak]}</span> is your biggest day, at about{' '}
+        <span className="font-medium tabular-nums">{formatMinor(Math.round(stats.avg[stats.peak]))}</span>.{' '}
+        <span className="text-muted-foreground">{insight}</span>
+      </p>
+      <HeatLegend />
+    </div>
+  )
+}
+
+function MonthCalendar({ selectedAccount }: { selectedAccount: string | null }) {
+  const [offset, setOffset] = useState(0)
+  const [selected, setSelected] = useState<string | null>(dayKey(Date.now()))
+
+  const month = useMemo(() => {
+    const n = new Date()
+    return new Date(n.getFullYear(), n.getMonth() + offset, 1)
+  }, [offset])
+  const from = month.getTime()
+  const to = new Date(month.getFullYear(), month.getMonth() + 1, 1).getTime() - 1
+
+  const q = useQuery({
+    queryKey: ['transactions', 'spendByDay', 'month', from],
+    queryFn: () => fetchDebits(from, to),
+    staleTime: 60_000,
+  })
+
+  const byDay = useMemo(() => {
+    const map = new Map<string, { total: number; items: Transaction[] }>()
+    for (const t of q.data ?? []) {
+      if (selectedAccount && t.accountId !== selectedAccount) continue
+      const k = dayKey(t.occurredAt)
+      const entry = map.get(k) ?? { total: 0, items: [] }
+      entry.total += t.amountMinor
+      entry.items.push(t)
+      map.set(k, entry)
+    }
+    return map
+  }, [q.data, selectedAccount])
+
+  const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate()
+  const lead = mondayIndex(month)
+  const todayStart = startOfDay(Date.now())
+  const values = [...byDay.values()].map((v) => v.total)
+  const max = Math.max(0, ...values)
+  const monthTotal = values.reduce((s, v) => s + v, 0)
+  let busiest: { day: number; total: number } | null = null
+  for (let d = 1; d <= daysInMonth; d++) {
+    const total = byDay.get(dayKey(new Date(month.getFullYear(), month.getMonth(), d).getTime()))?.total ?? 0
+    if (total > (busiest?.total ?? 0)) busiest = { day: d, total }
+  }
+
+  const go = (delta: number) => {
+    const next = Math.min(0, offset + delta)
+    setOffset(next)
+    setSelected(next === 0 ? dayKey(Date.now()) : null)
+  }
+
+  const detail = selected ? byDay.get(selected) : null
+  const selectedDate = selected
+    ? (() => {
+        const [y, m, d] = selected.split('-').map(Number)
+        return new Date(y, m, d)
+      })()
+    : null
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" size="icon" className="size-9 rounded-full" onClick={() => go(-1)} aria-label="Previous month">
+          <ChevronLeft className="size-4" />
+        </Button>
+        <div className="text-center">
+          <p className="text-sm font-semibold">{month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</p>
+          <p className="text-xs text-muted-foreground">
+            {q.isLoading
+              ? 'Loading…'
+              : monthTotal > 0
+                ? `${formatMinor(monthTotal)} spent${busiest ? `, busiest on the ${busiest.day}${ordinal(busiest.day)}` : ''}`
+                : 'No spending this month'}
+          </p>
+        </div>
+        <Button variant="ghost" size="icon" className="size-9 rounded-full" onClick={() => go(1)} disabled={offset >= 0} aria-label="Next month">
+          <ChevronRight className="size-4" />
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1.5 text-center text-[0.7rem] text-muted-foreground">
+        {WEEKDAYS.map((d) => (
+          <span key={d}>{d[0]}</span>
+        ))}
+      </div>
+
+      {q.isLoading ? (
+        <Skeleton className="h-52 w-full rounded-2xl" />
+      ) : (
+        <div className="grid grid-cols-7 gap-1.5">
+          {Array.from({ length: lead }).map((_, i) => (
+            <span key={`b${i}`} />
+          ))}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const day = i + 1
+            const date = new Date(month.getFullYear(), month.getMonth(), day)
+            const key = dayKey(date.getTime())
+            const total = byDay.get(key)?.total ?? 0
+            const future = date.getTime() > todayStart
+            const isToday = date.getTime() === todayStart
+            return (
+              <button
+                key={day}
+                type="button"
+                disabled={future}
+                onClick={() => setSelected(selected === key ? null : key)}
+                aria-label={`${date.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}: ${formatMinor(total)}`}
+                className={cn(
+                  'flex aspect-square items-center justify-center rounded-lg text-xs tabular-nums transition-transform active:scale-90',
+                  HEAT[heatLevel(total, max)],
+                  future && 'opacity-25',
+                  isToday && 'font-bold',
+                  selected === key ? 'ring-2 ring-foreground/80' : isToday && 'ring-1 ring-indigo-300/70',
+                )}
+              >
+                {day}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {selectedDate && !q.isLoading && (
+        <div className="rounded-2xl bg-muted/50 p-3">
+          <div className="flex items-baseline justify-between">
+            <p className="text-sm font-medium">
+              {selectedDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}
+            </p>
+            <p className="text-sm font-semibold tabular-nums">{formatMinor(detail?.total ?? 0)}</p>
+          </div>
+          {detail ? (
+            <ul className="mt-2 space-y-1.5">
+              {[...detail.items]
+                .sort((a, b) => b.amountMinor - a.amountMinor)
+                .slice(0, 3)
+                .map((t) => (
+                  <li key={t.id} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="truncate text-muted-foreground">{t.merchantName ?? 'Unknown merchant'}</span>
+                    <span className="shrink-0 tabular-nums">{formatMinor(t.amountMinor)}</span>
+                  </li>
+                ))}
+              {detail.items.length > 3 && (
+                <li className="text-xs text-muted-foreground">and {detail.items.length - 3} more</li>
+              )}
+            </ul>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">Nothing spent this day.</p>
+          )}
+        </div>
+      )}
+
+      <HeatLegend />
+    </div>
+  )
+}
+
+function ordinal(n: number) {
+  const v = n % 100
+  if (v >= 11 && v <= 13) return 'th'
+  return ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'
 }
