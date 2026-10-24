@@ -238,8 +238,10 @@ export interface ListenerStatus {
 export interface AccountProposal {
   packageName: string
   name: string
+  type?: string
   lastDigits: string
   balanceMinor: number | null
+  sourceTexts?: string[]
 }
 
 export interface SmsImportState {

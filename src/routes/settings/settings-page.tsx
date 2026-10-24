@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { MessageSquarePlus, Pencil, Plus, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
+import { MessageSquarePlus, Pencil, Plus, RefreshCw, ShieldCheck, Trash2, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import { LocalExpense } from '@/lib/plugin'
-import type { AccountBalance, AccountType } from '@/lib/plugin'
+import type { AccountBalance, AccountProposal, AccountType } from '@/lib/plugin'
 import { formatMinor, parseMajorToMinor } from '@/lib/money'
 import { queryKeys } from '@/lib/query'
 import { Badge } from '@/components/ui/badge'
@@ -95,7 +95,7 @@ export function SettingsPage() {
   const accounts = balances.data?.balances ?? []
 
   return (
-    <div className="mx-auto flex h-full max-w-lg flex-col gap-4 overflow-y-auto px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-4">
+    <div className="mx-auto block h-full max-w-lg space-y-4 overflow-y-auto px-4 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-4">
       <header>
         <h1 className="text-xl font-semibold">Settings</h1>
       </header>
@@ -244,6 +244,95 @@ export function SettingsPage() {
               }}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="shrink-0">
+        <CardHeader>
+          <CardTitle className="text-base">Debug</CardTitle>
+          <CardDescription>Populate the app with random sample data for testing.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="outline"
+            className="h-11 w-full"
+            onClick={async () => {
+              try {
+                const categories = (await LocalExpense.listCategories()).categories
+                const expenseCats = categories.filter((c) => c.kind === 'EXPENSE')
+                await LocalExpense.setAccountBalance({
+                  name: 'HDFC Savings',
+                  lastDigits: '4821',
+                  type: 'BANK',
+                  balanceMinor: 12500000,
+                })
+                await LocalExpense.setAccountBalance({
+                  name: 'Cash Wallet',
+                  lastDigits: '0000',
+                  type: 'CASH',
+                  balanceMinor: 650000,
+                })
+                const merchants = ['Swiggy', 'Zomato', 'Amazon', 'Uber', 'BigBasket', 'Netflix', 'Spotify', 'Electricity Board', 'Rent', 'Pharmacy']
+                for (let i = 0; i < 80; i++) {
+                  const daysAgo = Math.floor(Math.random() * 90)
+                  const occurredAt = Date.now() - daysAgo * 24 * 60 * 60 * 1000
+                  const amount = Math.round((50 + Math.random() * 4950) * 100)
+                  const merchant = merchants[Math.floor(Math.random() * merchants.length)]
+                  const category = expenseCats[Math.floor(Math.random() * expenseCats.length)]
+                  await LocalExpense.createManualTransaction({
+                    amountMinor: amount,
+                    direction: Math.random() > 0.85 ? 'CREDIT' : 'DEBIT',
+                    kind: Math.random() > 0.85 ? 'INCOME' : 'SPEND',
+                    categoryId: category?.id ?? null,
+                    merchantName: merchant,
+                    occurredAt,
+                    note: null,
+                  })
+                }
+                await LocalExpense.upsertCommitment({
+                  name: 'Apartment Rent',
+                  amountMinor: 2800000,
+                  dueAt: Date.now() + 5 * 24 * 60 * 60 * 1000,
+                  recurrence: 'MONTHLY',
+                })
+                await LocalExpense.upsertCommitment({
+                  name: 'Electricity',
+                  amountMinor: 345000,
+                  dueAt: Date.now() + 12 * 24 * 60 * 60 * 1000,
+                  recurrence: 'MONTHLY',
+                })
+                await LocalExpense.upsertGoal({
+                  name: 'Emergency Cushion',
+                  targetMinor: 15000000,
+                  savedMinor: 4000000,
+                })
+                await LocalExpense.upsertGoal({
+                  name: 'Workstation Upgrade',
+                  targetMinor: 12000000,
+                  savedMinor: 2500000,
+                })
+                await LocalExpense.upsertBudget({
+                  categoryId: expenseCats[0]?.id ?? null,
+                  period: 'MONTHLY',
+                  limitMinor: 1500000,
+                })
+                await LocalExpense.setFinancialSettings({
+                  bufferMinor: 5000000,
+                  incomeDay: 1,
+                  expectedIncomeMinor: 8500000,
+                  essentialCategories: expenseCats.slice(0, 3).map((c) => c.id),
+                })
+                await LocalExpense.setOnboardingComplete({ completed: true })
+                void client.invalidateQueries()
+                toast.success('Sample data seeded')
+              } catch (error) {
+                console.error(error)
+                toast.error('Could not seed data')
+              }
+            }}
+          >
+            Seed random data
+          </Button>
         </CardContent>
       </Card>
 
@@ -398,6 +487,9 @@ function AccountDialog({
   const [lastDigits, setLastDigits] = useState('')
   const [balance, setBalance] = useState('')
   const [type, setType] = useState<AccountType>('BANK')
+  const [detectedProposals, setDetectedProposals] = useState<AccountProposal[]>([])
+  const [selectedDetected, setSelectedDetected] = useState<Set<number>>(new Set())
+  const [infoIndex, setInfoIndex] = useState<number | null>(null)
 
   const accountKinds: { value: AccountType; label: string }[] = [
     { value: 'BANK', label: 'Bank' },
@@ -410,6 +502,20 @@ function AccountDialog({
   const isOpen = account ? (open ?? false) : internalOpen
   const setOpen = account ? (onOpenChange ?? (() => {})) : setInternalOpen
 
+  useEffect(() => {
+    if (!isOpen) return
+    if (account) {
+      setName(account.name)
+      setLastDigits(account.lastDigits ?? '')
+      setBalance((account.anchorBalanceMinor / 100).toFixed(2))
+      setType(account.type)
+    } else {
+      setName('')
+      setLastDigits('')
+      setBalance('')
+      setType('BANK')
+    }
+  }, [isOpen, account])
   const save = useMutation({
     mutationFn: () =>
       LocalExpense.setAccountBalance({
@@ -429,6 +535,43 @@ function AccountDialog({
       setBalance('')
     },
     onError: () => toast.error('Could not save the account'),
+  })
+
+  const detect = useMutation({
+    mutationFn: () => LocalExpense.detectAccounts(),
+    onSuccess: ({ proposals }) => {
+      if (proposals.length === 0) {
+        toast.info('No accounts detected in stored messages')
+        return
+      }
+      setDetectedProposals(proposals)
+      setSelectedDetected(new Set(proposals.map((_, index) => index)))
+    },
+    onError: () => toast.error('Could not detect accounts'),
+  })
+
+  const addDetected = useMutation({
+    mutationFn: async () => {
+      for (const index of selectedDetected) {
+        const proposal = detectedProposals[index]
+        if (!proposal) continue
+        await LocalExpense.setAccountBalance({
+          name: proposal.name,
+          lastDigits: proposal.lastDigits,
+          type: (proposal.type === 'CARD' ? 'CARD' : proposal.type === 'CASH' ? 'CASH' : proposal.type === 'WALLET' ? 'WALLET' : proposal.type === 'OTHER' ? 'OTHER' : 'BANK') as AccountType,
+          balanceMinor: proposal.balanceMinor ?? 0,
+        })
+      }
+    },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: queryKeys.accounts })
+      await client.invalidateQueries({ queryKey: queryKeys.balances })
+      toast.success(`Added ${selectedDetected.size} account(s)`)
+      setDetectedProposals([])
+      setSelectedDetected(new Set())
+      setOpen(false)
+    },
+    onError: () => toast.error('Could not add accounts'),
   })
 
   return (
@@ -461,6 +604,86 @@ function AccountDialog({
                : 'Set the current balance to start tracking.'}
            </DialogDescription>
         </DialogHeader>
+        <Button
+          variant="outline"
+          className="h-11 w-full"
+          onClick={() => detect.mutate()}
+          disabled={detect.isPending}
+        >
+          <Wallet className="size-4" />
+          {detect.isPending ? 'Detecting…' : 'Auto-detect from messages'}
+        </Button>
+
+        {detectedProposals.length > 0 && (
+          <div className="space-y-2 rounded-xl border border-border bg-muted/40 p-3">
+            <p className="text-xs font-medium text-foreground">Detected accounts (select to add)</p>
+            {detectedProposals.map((proposal, index) => (
+              <div key={`${proposal.lastDigits}-${index}`} className="space-y-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={selectedDetected.has(index)}
+                    onChange={(event) => {
+                      setSelectedDetected((current) => {
+                        const next = new Set(current)
+                        if (event.target.checked) next.add(index)
+                        else next.delete(index)
+                        return next
+                      })
+                    }}
+                  />
+                  <span className="flex-1">
+                    {proposal.name} · ··{proposal.lastDigits}
+                    {proposal.balanceMinor != null ? ` · ${formatMinor(proposal.balanceMinor)}` : ''}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setInfoIndex(infoIndex === index ? null : index)}
+                  >
+                    info
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setDetectedProposals((current) => current.filter((_, i) => i !== index))
+                      setSelectedDetected((current) => {
+                        const next = new Set<number>()
+                        current.forEach((value) => {
+                          if (value < index) next.add(value)
+                          else if (value > index) next.add(value - 1)
+                        })
+                        return next
+                      })
+                      if (infoIndex === index) setInfoIndex(null)
+                      else if (infoIndex != null && infoIndex > index) setInfoIndex(infoIndex - 1)
+                    }}
+                  >
+                    remove
+                  </button>
+                </div>
+                {infoIndex === index && (
+                  <div className="ml-6 space-y-1 rounded-lg border border-border bg-background/60 p-2 text-[10px] text-muted-foreground">
+                    <p className="font-medium text-foreground">Candidate messages</p>
+                    {(proposal.sourceTexts ?? []).length === 0 && <p>No candidate messages.</p>}
+                    {(proposal.sourceTexts ?? []).map((text, i) => (
+                      <p key={i} className="whitespace-pre-wrap">{text}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            <Button
+              className="h-10 w-full"
+              disabled={selectedDetected.size === 0 || addDetected.isPending}
+              onClick={() => addDetected.mutate()}
+            >
+              {addDetected.isPending ? 'Adding…' : `Add selected (${selectedDetected.size})`}
+            </Button>
+          </div>
+        )}
+
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label>Name</Label>

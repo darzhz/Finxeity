@@ -42,7 +42,7 @@ export function CommitmentsPage() {
   const items = query.data?.commitments ?? []
 
   return (
-    <div className="mx-auto flex h-full max-w-lg flex-col gap-4 overflow-y-auto px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-4">
+    <div className="mx-auto block h-full max-w-lg space-y-4 overflow-y-auto px-4 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-4">
       <header>
         <h1 className="text-xl font-semibold">Upcoming bills</h1>
         <p className="text-sm text-muted-foreground">Rent, utilities, EMIs and subscriptions.</p>

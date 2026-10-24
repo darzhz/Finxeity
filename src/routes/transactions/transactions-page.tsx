@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownLeft, ArrowUpRight, Check, ChevronDown } from 'lucide-react'
+import { Check, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Transaction } from '@/lib/plugin'
 import { LocalExpense } from '@/lib/plugin'
@@ -27,7 +27,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMinor, parseMajorToMinor } from '@/lib/money'
 import { formatDateTime, formatRelativeTime } from '@/lib/format'
 
@@ -51,6 +51,7 @@ export function TransactionsPage() {
   const [tab, setTab] = useState<FilterKey>('all')
   const [range, setRange] = useState<RangeKey>('all')
   const [categoryId, setCategoryId] = useState<string | null>(null)
+  const [accountId, setAccountId] = useState<string | null>(null)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [adding, setAdding] = useState(false)
   const [amount, setAmount] = useState('')
@@ -58,11 +59,23 @@ export function TransactionsPage() {
   const [newCategoryId, setNewCategoryId] = useState<string | null>(null)
   const [merchant, setMerchant] = useState('')
   const [note, setNote] = useState('')
+  const [wheel, setWheel] = useState<{ x: number; y: number; transaction: Transaction } | null>(null)
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null)
+  const [hoveredCategory, setHoveredCategory] = useState<string | null>(null)
+  const hoveredCategoryRef = useRef<string | null>(null)
+  const longPressTimer = useRef<number | null>(null)
+  const startPos = useRef<{ x: number; y: number } | null>(null)
+  const didLongPress = useRef(false)
   const filters = filtersFor[tab]
 
   const categories = useQuery({
     queryKey: ['categories'],
     queryFn: () => LocalExpense.listCategories(),
+  })
+
+  const accounts = useQuery({
+    queryKey: queryKeys.accounts,
+    queryFn: () => LocalExpense.listAccounts(),
   })
 
   const query = useInfiniteQuery({
@@ -84,7 +97,57 @@ export function TransactionsPage() {
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })
 
-  const transactions = query.data?.pages.flatMap((page) => page.items) ?? []
+  const allTransactions = query.data?.pages.flatMap((page) => page.items) ?? []
+  const transactions = accountId ? allTransactions.filter((t) => t.accountId === accountId) : allTransactions
+
+  useEffect(() => {
+    if (!wheel) {
+      hoveredCategoryRef.current = null
+      return
+    }
+    const onMove = (e: PointerEvent) => {
+      setDragPos({ x: e.clientX, y: e.clientY })
+      const cats = (categories.data?.categories ?? []).slice(0, 8)
+      const radius = 96
+      let nearest: string | null = null
+      let min = 42
+      cats.forEach((cat, index) => {
+        const angle = (index / cats.length) * Math.PI * 2 - Math.PI / 2
+        const cx = wheel.x + radius * Math.cos(angle)
+        const cy = wheel.y + radius * Math.sin(angle)
+        const d = Math.hypot(e.clientX - cx, e.clientY - cy)
+        if (d < min) {
+          min = d
+          nearest = cat.id
+        }
+      })
+      hoveredCategoryRef.current = nearest
+      setHoveredCategory(nearest)
+    }
+    const onUp = () => {
+      const selected = hoveredCategoryRef.current
+      if (wheel && selected) {
+        LocalExpense.correctTransaction({ id: wheel.transaction.id, categoryId: selected })
+          .then(() => {
+            void client.invalidateQueries({ queryKey: ['transactions'] })
+            toast.success('Category updated')
+          })
+          .catch(() => toast.error('Could not update category'))
+      }
+      setWheel(null)
+      setDragPos(null)
+      setHoveredCategory(null)
+      hoveredCategoryRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [wheel, categories.data])
 
   const client = useQueryClient()
   const addTx = useMutation({
@@ -109,7 +172,7 @@ export function TransactionsPage() {
   })
 
   return (
-    <div className="mx-auto flex h-full max-w-lg flex-col gap-4 px-4 pt-[calc(1rem+env(safe-area-inset-top))]">
+    <div className="mx-auto block h-full max-w-lg space-y-4 overflow-y-auto px-4 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-6">
       <header className="shrink-0 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">Transactions</h1>
@@ -136,57 +199,42 @@ export function TransactionsPage() {
         </TabsList>
       </Tabs>
 
-      <div className="flex shrink-0 gap-2 overflow-x-auto pb-1">
-        {ranges.map((entry) => (
-          <Button
-            key={entry.key}
-            variant={entry.key === range ? 'secondary' : 'outline'}
-            size="sm"
-            className="h-9 shrink-0"
-            onClick={() => setRange(entry.key)}
-          >
-            {entry.label}
-          </Button>
-        ))}
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 shrink-0 gap-1">
-              {categories.data?.categories.find((c) => c.id === categoryId)?.name ?? 'Category'}
-              <ChevronDown className="size-3.5 opacity-60" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-56 p-0">
-            <Command>
-              <CommandInput placeholder="Search categories" />
-              <CommandList>
-                <CommandEmpty>No category found.</CommandEmpty>
-                <CommandGroup>
-                  <CommandItem
-                    value="all categories"
-                    onSelect={() => setCategoryId(null)}
-                  >
-                    <Check className={categoryId === null ? 'size-4 opacity-100' : 'size-4 opacity-0'} />
-                    All categories
-                  </CommandItem>
-                  {categories.data?.categories.map((category) => (
-                    <CommandItem
-                      key={category.id}
-                      value={category.name}
-                      onSelect={() => setCategoryId(category.id)}
-                    >
-                      <Check
-                        className={
-                          category.id === categoryId ? 'size-4 opacity-100' : 'size-4 opacity-0'
-                        }
-                      />
-                      {category.name}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        <select
+          value={range}
+          onChange={(e) => setRange(e.target.value as RangeKey)}
+          className="h-9 rounded-xl border border-border bg-card px-3 text-xs text-foreground"
+        >
+          {ranges.map((entry) => (
+            <option key={entry.key} value={entry.key}>
+              {entry.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={accountId ?? ''}
+          onChange={(e) => setAccountId(e.target.value || null)}
+          className="h-9 rounded-xl border border-border bg-card px-3 text-xs text-foreground"
+        >
+          <option value="">All accounts</option>
+          {accounts.data?.accounts.map((account) => (
+            <option key={account.id} value={account.id}>
+              {account.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={categoryId ?? ''}
+          onChange={(e) => setCategoryId(e.target.value || null)}
+          className="h-9 rounded-xl border border-border bg-card px-3 text-xs text-foreground"
+        >
+          <option value="">All categories</option>
+          {categories.data?.categories.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <Drawer open={adding} onOpenChange={setAdding}>
@@ -242,7 +290,8 @@ export function TransactionsPage() {
               <Input id="note" value={note} onChange={(e) => setNote(e.target.value)} />
             </div>
           </div>
-          <DrawerFooter>
+
+        <DrawerFooter>
             <Button onClick={() => addTx.mutate()} disabled={addTx.isPending || !amount}>
               {addTx.isPending ? 'Adding…' : 'Add'}
             </Button>
@@ -253,7 +302,7 @@ export function TransactionsPage() {
         </DrawerContent>
       </Drawer>
 
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pb-4">
+      <div className="space-y-2 pb-4">
         {query.isLoading &&
           Array.from({ length: 5 }).map((_, index) => (
             <Skeleton key={index} className="h-16 w-full" />
@@ -269,8 +318,43 @@ export function TransactionsPage() {
           <button
             key={transaction.id}
             type="button"
-            className="flex w-full items-center gap-3 rounded-lg border p-3 text-left active:bg-muted"
-            onClick={() => setEditing(transaction)}
+            className="flex w-full touch-pan-y select-none items-center gap-3 rounded-2xl border border-border bg-card p-3 text-left active:bg-muted"
+            onClick={() => {
+              if (didLongPress.current) {
+                didLongPress.current = false
+                return
+              }
+              setEditing(transaction)
+            }}
+            onPointerDown={(e) => {
+              startPos.current = { x: e.clientX, y: e.clientY }
+              longPressTimer.current = window.setTimeout(() => {
+                didLongPress.current = true
+                setWheel({ x: e.clientX, y: e.clientY, transaction })
+                setDragPos({ x: e.clientX, y: e.clientY })
+              }, 450)
+            }}
+            onPointerMove={(e) => {
+              if (longPressTimer.current && startPos.current) {
+                if (Math.abs(e.clientX - startPos.current.x) > 10 || Math.abs(e.clientY - startPos.current.y) > 10) {
+                  window.clearTimeout(longPressTimer.current)
+                  longPressTimer.current = null
+                }
+              }
+            }}
+            onPointerUp={() => {
+              if (longPressTimer.current) {
+                window.clearTimeout(longPressTimer.current)
+                longPressTimer.current = null
+              }
+            }}
+            onPointerCancel={() => {
+              if (longPressTimer.current) {
+                window.clearTimeout(longPressTimer.current)
+                longPressTimer.current = null
+              }
+            }}
+            onContextMenu={(e) => e.preventDefault()}
           >
             <TransactionRow transaction={transaction} />
           </button>
@@ -288,6 +372,38 @@ export function TransactionsPage() {
         )}
       </div>
 
+      {wheel && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-background/40 backdrop-blur-sm" />
+          <div
+            className="absolute h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-indigo-400 bg-indigo-500/20"
+            style={{ left: wheel.x, top: wheel.y }}
+          />
+          {(categories.data?.categories ?? []).slice(0, 8).map((cat, index) => {
+            const cats = (categories.data?.categories ?? []).slice(0, 8)
+            const angle = (index / cats.length) * Math.PI * 2 - Math.PI / 2
+            const radius = 96
+            const x = wheel.x + radius * Math.cos(angle)
+            const y = wheel.y + radius * Math.sin(angle)
+            const active = hoveredCategory === cat.id
+            return (
+              <div
+                key={cat.id}
+                className={`absolute flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-xs font-bold transition-all ${active ? 'scale-125 border-indigo-400 bg-indigo-600 text-white shadow-lg' : 'border-border bg-card text-foreground'}`}
+                style={{ left: x, top: y }}
+              >
+                {categoryEmoji(cat.name)}
+              </div>
+            )
+          })}
+          {dragPos && (
+            <svg className="pointer-events-none absolute inset-0 h-full w-full">
+              <line x1={wheel.x} y1={wheel.y} x2={dragPos.x} y2={dragPos.y} stroke="rgba(99,102,241,0.6)" strokeWidth="2" />
+            </svg>
+          )}
+        </div>
+      )}
+
       <EditDrawer
         transaction={editing}
         onClose={() => setEditing(null)}
@@ -297,16 +413,36 @@ export function TransactionsPage() {
   )
 }
 
+function categoryEmoji(name: string) {
+  const n = name.toLowerCase()
+  if (n.includes('food') || n.includes('dining')) return '🍽️'
+  if (n.includes('grocer')) return '🛒'
+  if (n.includes('transport') || n.includes('commute')) return '🚗'
+  if (n.includes('bill') || n.includes('util')) return '💡'
+  if (n.includes('shop')) return '🛍️'
+  if (n.includes('health')) return '💊'
+  if (n.includes('entertain') || n.includes('leisure')) return '🍿'
+  if (n.includes('fee')) return '💳'
+  return '📁'
+}
+
 function TransactionRow({ transaction }: { transaction: Transaction }) {
   const isCredit = transaction.direction === 'CREDIT'
   return (
     <>
-      <div className="mt-0.5 rounded-md bg-muted p-1.5">
-        {isCredit ? (
-          <ArrowDownLeft className="size-4 text-muted-foreground" />
-        ) : (
-          <ArrowUpRight className="size-4 text-muted-foreground" />
-        )}
+      <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl bg-muted text-base">
+        {(() => {
+          const n = (transaction.categoryName ?? '').toLowerCase()
+          if (n.includes('food') || n.includes('dining')) return '🍽️'
+          if (n.includes('grocer')) return '🛒'
+          if (n.includes('transport') || n.includes('commute')) return '🚗'
+          if (n.includes('bill') || n.includes('util')) return '💡'
+          if (n.includes('shop')) return '🛍️'
+          if (n.includes('health')) return '💊'
+          if (n.includes('entertain') || n.includes('leisure')) return '🍿'
+          if (n.includes('fee')) return '💳'
+          return '📁'
+        })()}
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">
@@ -316,11 +452,9 @@ function TransactionRow({ transaction }: { transaction: Transaction }) {
           <span title={formatDateTime(transaction.occurredAt)}>
             {formatRelativeTime(transaction.occurredAt)}
           </span>
-          {transaction.categoryName && (
-            <Badge variant="outline" className="shrink-0">
-              {transaction.categoryName}
-            </Badge>
-          )}
+          <Badge variant={isCredit ? 'secondary' : 'outline'} className={`shrink-0 ${isCredit ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {isCredit ? 'Income' : 'Spend'}
+          </Badge>
         </p>
       </div>
       <div className="shrink-0 text-right">
@@ -357,6 +491,16 @@ function EditDrawer({
   const categories = useQuery({
     queryKey: ['categories'],
     queryFn: () => LocalExpense.listCategories(),
+  })
+
+  const rawEvent = useQuery({
+    queryKey: ['rawEventForTxn', transaction?.id],
+    queryFn: async () => {
+      if (!transaction?.rawEventId) return null
+      const page = await LocalExpense.listRawEvents({ limit: 200 })
+      return page.items.find((e) => e.id === transaction.rawEventId) ?? null
+    },
+    enabled: !!transaction,
   })
 
   // Rebuild the draft whenever a different transaction is opened.
@@ -397,8 +541,43 @@ function EditDrawer({
           <DrawerDescription>Corrections are remembered for the app.</DrawerDescription>
         </DrawerHeader>
 
-        <div className="space-y-4 px-4 pb-4">
-          <div className="space-y-1.5">
+        <Tabs defaultValue="details" className="px-4">
+          <TabsList className="w-full">
+            <TabsTrigger value="details" className="flex-1">Details</TabsTrigger>
+            <TabsTrigger value="source" className="flex-1">Source</TabsTrigger>
+          </TabsList>
+          <TabsContent value="source" className="space-y-3 py-3">
+            {rawEvent.isLoading && <p className="text-sm text-muted-foreground">Loading source…</p>}
+            {!rawEvent.isLoading && !rawEvent.data && (
+              <p className="text-sm text-muted-foreground">No source message (manual transaction).</p>
+            )}
+            {rawEvent.data && (
+              <div className="space-y-2 text-sm">
+                <div className="rounded-xl border bg-muted/40 p-3">
+                  <p className="text-xs text-muted-foreground">Sender</p>
+                  <p className="font-medium">{rawEvent.data.sender ?? rawEvent.data.packageName ?? 'Unknown'}</p>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3">
+                  <p className="text-xs text-muted-foreground">Title</p>
+                  <p className="font-medium">{rawEvent.data.title ?? '—'}</p>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3">
+                  <p className="text-xs text-muted-foreground">Message</p>
+                  <p className="whitespace-pre-wrap">{rawEvent.data.bigText ?? rawEvent.data.text ?? rawEvent.data.textLines ?? '—'}</p>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3">
+                  <p className="text-xs text-muted-foreground">Posted</p>
+                  <p className="font-medium">{new Date(rawEvent.data.postedAt).toLocaleString()}</p>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3">
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  <p className="font-medium">{rawEvent.data.status}</p>
+                </div>
+              </div>
+            )}
+          </TabsContent>
+          <TabsContent value="details" className="space-y-4 py-3">
+            <div className="space-y-1.5">
             <Label>Amount</Label>
             <Input
               className="h-11"
@@ -481,7 +660,9 @@ function EditDrawer({
               }
             />
           </div>
-        </div>
+
+          </TabsContent>
+        </Tabs>
 
         <DrawerFooter>
           <div className="mx-auto flex w-full max-w-lg gap-2 pb-[env(safe-area-inset-bottom)]">

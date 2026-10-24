@@ -33,7 +33,7 @@ export function ManageAppsPage() {
   })
 
   return (
-    <div className="mx-auto flex h-full max-w-lg flex-col gap-3 px-4 pt-[calc(1rem+env(safe-area-inset-top))]">
+    <div className="mx-auto block h-full max-w-lg space-y-3 px-4 pt-[calc(1.25rem+env(safe-area-inset-top))]">
       <header>
         <h1 className="text-xl font-semibold">Monitored apps</h1>
         <p className="text-sm text-muted-foreground">

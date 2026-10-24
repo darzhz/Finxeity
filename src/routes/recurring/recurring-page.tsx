@@ -59,7 +59,7 @@ export function RecurringPage() {
     }, 0)
 
   return (
-    <div className="mx-auto flex h-full max-w-lg flex-col gap-4 px-4 pt-[calc(1rem+env(safe-area-inset-top))]">
+    <div className="mx-auto block h-full max-w-lg space-y-4 px-4 pt-[calc(1.25rem+env(safe-area-inset-top))]">
       <header className="shrink-0">
         <h1 className="text-xl font-semibold">Recurring</h1>
         <p className="text-sm text-muted-foreground">

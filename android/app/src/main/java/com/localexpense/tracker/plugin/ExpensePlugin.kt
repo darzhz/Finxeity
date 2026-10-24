@@ -33,6 +33,7 @@ import com.localexpense.tracker.data.entity.CommitmentEntity
 import com.localexpense.tracker.data.entity.CommitmentStatus
 import com.localexpense.tracker.data.entity.GoalEntity
 import com.localexpense.tracker.data.entity.GoalStatus
+import com.localexpense.tracker.data.entity.RawEventSource
 import com.localexpense.tracker.data.entity.RecurringStatus
 import com.localexpense.tracker.data.entity.TransactionKind
 import com.localexpense.tracker.settings.AppSettings
@@ -245,15 +246,30 @@ class ExpensePlugin : Plugin() {
     @PluginMethod
     fun detectAccounts(call: PluginCall) {
         scope.launch {
-            val messages = activeNotifications().mapNotNull { NotificationExtractor.fromStatusBarNotification(it) }
+            val rawEvents = repo.listRawEvents(null, null, null, null, 1000)
+            val messages = rawEvents.map { event ->
+                ExtractedNotification(
+                    packageName = if (event.source == RawEventSource.SMS) (event.sender ?: "sms") else (event.packageName ?: "unknown"),
+                    notificationKey = event.notificationKey,
+                    title = event.title,
+                    text = event.text,
+                    bigText = event.bigText,
+                    textLines = event.textLines?.split("\n") ?: emptyList(),
+                    postedAt = event.postedAt,
+                )
+            }
             val proposals = JSArray()
             BalanceService.proposeAccounts(messages).forEach { proposal ->
                 proposals.put(
                     JSObject().apply {
                         put("packageName", proposal.packageName)
-                        put("name", InstalledApps.labelFor(context, proposal.packageName) ?: proposal.packageName)
+                        put("name", proposal.name ?: (if (proposal.packageName == "sms" || proposal.packageName == "unknown") proposal.packageName else (InstalledApps.labelFor(context, proposal.packageName) ?: proposal.packageName)))
+                        put("type", proposal.type)
                         put("lastDigits", proposal.lastDigits)
                         put("balanceMinor", proposal.balanceMinor ?: org.json.JSONObject.NULL)
+                        val texts = org.json.JSONArray()
+                        proposal.sourceTexts.forEach { texts.put(it) }
+                        put("sourceTexts", texts)
                     },
                 )
             }

@@ -39,7 +39,7 @@ export function BudgetsPage() {
   const items = query.data?.budgets ?? []
 
   return (
-    <div className="mx-auto flex h-full max-w-lg flex-col gap-4 overflow-y-auto px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-4">
+    <div className="mx-auto block h-full max-w-lg space-y-4 overflow-y-auto px-4 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-4">
       <header>
         <h1 className="text-xl font-semibold">Spending limits</h1>
       </header>

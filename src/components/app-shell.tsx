@@ -15,7 +15,7 @@ export function AppShell() {
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
-      <main className="min-h-0 flex-1 overflow-hidden pb-[calc(4rem+env(safe-area-inset-bottom))]">
+      <main className="min-h-0 flex-1 overflow-hidden pb-[calc(5rem+env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
       <nav className="fixed inset-x-0 bottom-0 z-40 bg-background/85 pb-[env(safe-area-inset-bottom)] shadow-[0_-1px_12px_rgba(0,0,0,0.12)] backdrop-blur-xl">
