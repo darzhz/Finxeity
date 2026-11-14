@@ -95,7 +95,7 @@ class ExpenseNotificationListener : NotificationListenerService() {
     private fun processActiveNotifications() {
         val active = try {
             activeNotifications?.toList() ?: emptyList()
-        } catch (e: SecurityException) {
+        } catch (e: Exception) {
             emptyList()
         }
         active.forEach { processSbn(it) }
