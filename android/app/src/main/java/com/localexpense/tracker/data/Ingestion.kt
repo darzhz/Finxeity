@@ -72,12 +72,12 @@ class IngestionPipeline(private val database: AppDatabase) {
             if (parsed.type == MessageType.BALANCE_ONLY) {
                 storeCheckpoint(event, parsed)
             }
-            mark(event, RawEventStatus.IGNORED)
+            mark(event, RawEventStatus.IGNORED, parsed.source, parsed.version)
             return IngestionOutcome.Ignored(parsed.type)
         }
 
         if (parsed.amountMinor == null) {
-            mark(event, RawEventStatus.NEEDS_REVIEW)
+            mark(event, RawEventStatus.NEEDS_REVIEW, parsed.source, parsed.version)
             return IngestionOutcome.NeedsReview(parsed)
         }
 
@@ -88,6 +88,8 @@ class IngestionPipeline(private val database: AppDatabase) {
                     id = event.id,
                     status = RawEventStatus.PARSED,
                     parseVersion = TransactionParser.PARSE_VERSION,
+                    parseSource = parsed.source,
+                    modelVersion = parsed.version,
                     duplicateOf = duplicate.rawEventId,
                 )
             }
@@ -99,7 +101,7 @@ class IngestionPipeline(private val database: AppDatabase) {
         val account = linkAccount(parsed)
 
         if (parsed.confidence < TransactionParser.CONFIDENCE_THRESHOLD) {
-            mark(event, RawEventStatus.NEEDS_REVIEW)
+            mark(event, RawEventStatus.NEEDS_REVIEW, parsed.source, parsed.version)
             return IngestionOutcome.NeedsReview(parsed)
         }
 
@@ -132,6 +134,8 @@ class IngestionPipeline(private val database: AppDatabase) {
                 id = event.id,
                 status = RawEventStatus.PARSED,
                 parseVersion = TransactionParser.PARSE_VERSION,
+                parseSource = parsed.source,
+                modelVersion = parsed.version,
                 duplicateOf = null,
             )
         }
@@ -140,12 +144,19 @@ class IngestionPipeline(private val database: AppDatabase) {
         return IngestionOutcome.Created(transaction)
     }
 
-    private suspend fun mark(event: RawEventEntity, status: RawEventStatus) {
+    private suspend fun mark(
+        event: RawEventEntity,
+        status: RawEventStatus,
+        parseSource: String? = null,
+        modelVersion: String? = null,
+    ) {
         database.withTransaction {
             rawEventDao.updateParse(
                 id = event.id,
                 status = status,
                 parseVersion = TransactionParser.PARSE_VERSION,
+                parseSource = parseSource,
+                modelVersion = modelVersion,
                 duplicateOf = event.duplicateOf,
             )
         }

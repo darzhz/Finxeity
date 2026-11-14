@@ -36,6 +36,10 @@ data class ParsedMessage(
     val templateId: String? = null,
     /** Set when the money moved through a wallet rather than a bank account. */
     val wallet: String? = null,
+    /** Which parser produced this result: "template" or "model". */
+    val source: String = "template",
+    /** Version of the parser/model that produced this result. */
+    val version: String = "1",
 ) {
     val isTransactionCandidate: Boolean
         get() = type == MessageType.SPEND || type == MessageType.CREDIT
@@ -45,7 +49,16 @@ data class ParsedMessage(
         get() = isTransactionCandidate && amountMinor != null && amountMinor > 0
 
     companion object {
-        fun ignored(type: MessageType, confidence: Float = 0.95f) =
-            ParsedMessage(type = type, confidence = confidence)
+        fun ignored(
+            type: MessageType,
+            confidence: Float = 0.95f,
+            source: String = "template",
+            version: String = "1",
+        ) = ParsedMessage(
+            type = type,
+            confidence = confidence,
+            source = source,
+            version = version,
+        )
     }
 }

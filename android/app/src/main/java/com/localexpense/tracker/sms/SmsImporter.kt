@@ -28,7 +28,7 @@ object SmsImporter {
      * Reads the inbox since [sinceMillis] and stores any new messages.
      * @return number of newly stored raw events.
      */
-    suspend fun importRecent(context: Context, repo: Repo, sinceMillis: Long, limit: Int = 500): Int {
+    suspend fun importRecent(context: Context, repo: Repo, sinceMillis: Long, limit: Int = 10000): Int {
         if (!isSupported() || !hasPermission(context)) return 0
         val projection = arrayOf(
             Telephony.Sms.ADDRESS,

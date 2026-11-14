@@ -51,7 +51,7 @@ import com.localexpense.tracker.data.entity.TransactionEntity
         GoalEntity::class,
         DailySummaryEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -96,7 +96,7 @@ abstract class AppDatabase : RoomDatabase() {
         private fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, DB_NAME)
                 .addCallback(SeedCallback)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
 
         /**
@@ -157,7 +157,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /** v2 added duplicate tracking and the transaction reference id. */
+        /** v5 added parse_source and model_version to track which parser was used. */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE raw_events ADD COLUMN parse_source TEXT")
+                db.execSQL("ALTER TABLE raw_events ADD COLUMN model_version TEXT")
+            }
+        }
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE raw_events ADD COLUMN duplicate_of TEXT")

@@ -8,7 +8,7 @@ import androidx.room.PrimaryKey
 /**
  * An immutable captured message (notification or SMS).
  *
- * Only [status], [dismissedAt] and [parseVersion] may ever change; the original
+ * Only [status], [dismissedAt], [parseVersion], [parseSource] and [modelVersion] may ever change; the original
  * payload is preserved so that removing a read can also remove everything it
  * produced.
  */
@@ -36,6 +36,8 @@ data class RawEventEntity(
     val status: RawEventStatus,
     @ColumnInfo(name = "dismissed_at") val dismissedAt: Long? = null,
     @ColumnInfo(name = "parse_version") val parseVersion: Int = 0,
+    @ColumnInfo(name = "parse_source") val parseSource: String? = null,
+    @ColumnInfo(name = "model_version") val modelVersion: String? = null,
     /**
      * Set when this event turned out to be a second copy of an earlier one. The
      * transaction stays with the original, so removing either side has a clear

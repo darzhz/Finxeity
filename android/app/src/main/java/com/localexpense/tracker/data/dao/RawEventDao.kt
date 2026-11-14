@@ -70,7 +70,7 @@ interface RawEventDao {
     @Query(
         """
         UPDATE raw_events
-        SET status = :status, parse_version = :parseVersion, duplicate_of = :duplicateOf
+        SET status = :status, parse_version = :parseVersion, parse_source = :parseSource, model_version = :modelVersion, duplicate_of = :duplicateOf
         WHERE id = :id
         """,
     )
@@ -78,6 +78,8 @@ interface RawEventDao {
         id: String,
         status: RawEventStatus,
         parseVersion: Int,
+        parseSource: String?,
+        modelVersion: String?,
         duplicateOf: String?,
     )
 

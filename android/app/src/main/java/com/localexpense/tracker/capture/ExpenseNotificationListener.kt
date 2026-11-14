@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -28,13 +29,22 @@ class ExpenseNotificationListener : NotificationListenerService() {
         super.onCreate()
         TrackerGraph.init(this)
         scope.launch {
-            TrackerGraph.repo.monitoredPackagesFlow.collect { allowlist = it }
+            TrackerGraph.repo.monitoredPackagesFlow.collect { packages ->
+                allowlist = packages
+                // Newly allowlisted apps may already have notifications sitting
+                // in the shade, so sweep the active ones every time the list changes.
+                processActiveNotifications()
+            }
         }
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         publishState(STATE_CONNECTED)
+        scope.launch {
+            allowlist = TrackerGraph.settings.monitoredPackages.first()
+            processActiveNotifications()
+        }
     }
 
     override fun onListenerDisconnected() {
@@ -43,21 +53,31 @@ class ExpenseNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        processSbn(sbn)
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private fun processSbn(sbn: StatusBarNotification?) {
         val notification = sbn ?: return
         val packageName = notification.packageName ?: return
         if (packageName == this.packageName) return
-        if (packageName !in allowlist) return
-
-        val extracted = NotificationExtractor.fromStatusBarNotification(notification) ?: return
         scope.launch {
+            if (packageName !in allowlist) {
+                allowlist = TrackerGraph.settings.monitoredPackages.first()
+            }
+            if (packageName !in allowlist) return@launch
+
+            val extracted = NotificationExtractor.fromStatusBarNotification(notification) ?: return@launch
             val saved = TrackerGraph.repo.recordRawEvent(extracted, RawEventSource.NOTIFICATION)
                 ?: return@launch
             CaptureEvents.emit(
                 CaptureEvents.RAW_EVENT_CAPTURED,
                 JSObject().apply { put("event", saved.toJSObject()) },
             )
-            // The raw message is already safe. Interpretation is best effort so a
-            // parser problem can never lose a capture.
             val outcome = runCatching { TrackerGraph.repo.ingest(saved) }.getOrNull()
             if (outcome is IngestionOutcome.Created) {
                 CaptureEvents.emit(
@@ -72,9 +92,13 @@ class ExpenseNotificationListener : NotificationListenerService() {
         }
     }
 
-    override fun onDestroy() {
-        scope.cancel()
-        super.onDestroy()
+    private fun processActiveNotifications() {
+        val active = try {
+            activeNotifications?.toList() ?: emptyList()
+        } catch (e: SecurityException) {
+            emptyList()
+        }
+        active.forEach { processSbn(it) }
     }
 
     private fun publishState(state: String) {

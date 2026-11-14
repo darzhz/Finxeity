@@ -110,6 +110,8 @@ class EventLifecycle(private val database: AppDatabase) {
                 id = rawEventId,
                 status = status,
                 parseVersion = TransactionParser.PARSE_VERSION,
+                parseSource = parsed.source,
+                modelVersion = parsed.version,
                 duplicateOf = event.duplicateOf,
             )
             storeCheckpoint(event, parsed)
@@ -166,6 +168,8 @@ class EventLifecycle(private val database: AppDatabase) {
                 id = event.id,
                 status = RawEventStatus.PARSED,
                 parseVersion = TransactionParser.PARSE_VERSION,
+                parseSource = "manual",
+                modelVersion = null,
                 duplicateOf = event.duplicateOf,
             )
         }
@@ -223,6 +227,8 @@ class EventLifecycle(private val database: AppDatabase) {
                 id = event.id,
                 status = RawEventStatus.PARSED,
                 parseVersion = TransactionParser.PARSE_VERSION,
+                parseSource = "manual",
+                modelVersion = null,
                 duplicateOf = event.duplicateOf,
             )
         }

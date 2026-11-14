@@ -3,6 +3,7 @@ package com.localexpense.tracker.parse
 import com.localexpense.tracker.data.entity.TransactionDirection
 import com.localexpense.tracker.data.entity.TransactionKind
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,6 +25,7 @@ class TransactionParserTest {
         assertEquals(TransactionDirection.DEBIT, parsed.direction)
         assertEquals("Swiggy", parsed.merchant)
         assertTrue(parsed.confidence >= TransactionParser.CONFIDENCE_THRESHOLD)
+        assertEquals("template", parsed.source)
     }
 
     @Test
@@ -37,6 +39,7 @@ class TransactionParserTest {
         assertEquals(TransactionDirection.DEBIT, parsed.direction)
         assertEquals("4821", parsed.accountDigits)
         assertTrue(parsed.confidence >= TransactionParser.CONFIDENCE_THRESHOLD)
+        assertEquals("template", parsed.source)
     }
 
     @Test
@@ -153,5 +156,19 @@ class TransactionParserTest {
             packageName = "com.hdfc.bank",
         )
         assertEquals(TransactionKind.TRANSFER, parsed.kind)
+    }
+
+    @Test
+    fun `parsed message has source and version fields`() {
+        val parsed = parse("Paid ₹450 to Swiggy", packageName = "com.phonepe.app")
+        assertEquals("template", parsed.source)
+        assertEquals("2", parsed.version)
+    }
+
+    @Test
+    fun `ignored message has source and version`() {
+        val parsed = parse("Your OTP is 123456")
+        assertEquals("template", parsed.source)
+        assertEquals("2", parsed.version)
     }
 }

@@ -108,6 +108,9 @@ dependencies {
     implementation "androidx.work:work-runtime-ktx:$workVersion"
     ksp "androidx.room:room-compiler:$roomVersion"
 
+    // ONNX Runtime Mobile for MobileBERT inference
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.18.0"
+
     implementation project(':capacitor-android')
     implementation project(':capacitor-cordova-android-plugins')
 

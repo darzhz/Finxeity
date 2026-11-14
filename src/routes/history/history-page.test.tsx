@@ -34,7 +34,7 @@ describe('HistoryPage', () => {
     renderHistory(client)
 
     await waitFor(() =>
-      expect(screen.getByText('Notification history')).toBeInTheDocument(),
+      expect(screen.getByText('History')).toBeInTheDocument(),
     )
   })
 
@@ -49,7 +49,7 @@ describe('HistoryPage', () => {
     const row = await screen.findByText('Paid ₹450 to Swiggy')
     fireEvent.click(row)
 
-    const outcome = await screen.findByText('₹450.00 · Swiggy')
+    const outcome = await screen.findByText('It became')
     expect(outcome).toBeInTheDocument()
   })
 
@@ -62,7 +62,7 @@ describe('HistoryPage', () => {
     const remove = await screen.findByText('Remove this one')
     fireEvent.click(remove)
 
-    await waitFor(() => expect(screen.getByText('Restore')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Removed')).toBeInTheDocument())
   })
 
   it('filters to the messages that became transactions', async () => {

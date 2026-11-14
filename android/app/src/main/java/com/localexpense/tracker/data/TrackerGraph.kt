@@ -1,6 +1,7 @@
 package com.localexpense.tracker.data
 
 import android.content.Context
+import com.localexpense.tracker.parse.TransactionParser
 import com.localexpense.tracker.settings.AppSettings
 
 /**
@@ -15,6 +16,8 @@ object TrackerGraph {
     fun init(context: Context) {
         if (appContext == null) {
             appContext = context.applicationContext
+            // Initialize parser chain (templates + MobileBERT)
+            TransactionParser.initialize(appContext!!)
         }
     }
 

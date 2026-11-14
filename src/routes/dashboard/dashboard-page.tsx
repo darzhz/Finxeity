@@ -158,8 +158,6 @@ export function DashboardPage() {
       <span className="sr-only">Total balance</span>
       <span className="sr-only">Spending rate</span>
       <span className="sr-only">Cashflow</span>
-      <span className="sr-only">Where it went</span>
-      <span className="sr-only">Top merchants</span>
       <span className="sr-only">Savings potential</span>
       <span className="sr-only">Safe to spend</span>
       <span className="sr-only">Runway</span>
@@ -461,7 +459,7 @@ function BalanceHero({ data, selectedAccount }: { data: Dashboard; selectedAccou
   return (
     <section className="overflow-hidden rounded-3xl border border-border bg-card">
       <div className="px-5 pt-5">
-        <p className="text-sm text-muted-foreground">{account ? account.name : 'Total balance'}</p>
+        <p className="text-sm text-muted-foreground">{account ? account.name : 'All accounts'}</p>
         <p className="font-display mt-1 text-4xl font-bold tracking-tight tabular-nums">{formatMinor(shownBalance)}</p>
       </div>
 
