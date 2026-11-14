@@ -123,6 +123,7 @@ class Repo(
             ) {
                 lifecycle.correct(outcome.transaction.id, patch)
             }
+            markTransactionsChanged()
         }
         return when (outcome) {
             is IngestionOutcome.Created -> EventChange.Reprocessed(outcome.transaction)
