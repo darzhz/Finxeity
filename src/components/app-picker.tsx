@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import type { CandidateApp } from '@/lib/plugin'
@@ -13,8 +13,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 interface AppPickerProps {
   selected: string[]
   onChange: (packages: string[]) => void
-  /** Preselect the device's default messaging app the first time apps load. */
-  preselectDefaultSms?: boolean
 }
 
 function AppRow({
@@ -39,22 +37,15 @@ function AppRow({
   )
 }
 
-export function AppPicker({ selected, onChange, preselectDefaultSms = false }: AppPickerProps) {
+export function AppPicker({ selected, onChange }: AppPickerProps) {
   const [search, setSearch] = useState('')
-  const preselected = useRef(false)
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.candidateApps,
     queryFn: () => LocalExpense.getCandidateApps(),
   })
 
-  useEffect(() => {
-    if (!preselectDefaultSms || preselected.current || !data) return
-    preselected.current = true
-    if (selected.length === 0 && data.defaultSmsPackage) {
-      onChange([data.defaultSmsPackage])
-    }
-  }, [data, preselectDefaultSms, selected.length, onChange])
+  const selectedSet = useMemo(() => new Set(selected), [selected])
 
   const { suggested, others } = useMemo(() => {
     const apps = data?.apps ?? []
@@ -114,7 +105,7 @@ export function AppPicker({ selected, onChange, preselectDefaultSms = false }: A
                 <AppRow
                   key={app.packageName}
                   app={app}
-                  checked={selected.includes(app.packageName)}
+                  checked={selectedSet.has(app.packageName)}
                   onToggle={(next) => toggle(app.packageName, next)}
                 />
               ))}
@@ -128,7 +119,7 @@ export function AppPicker({ selected, onChange, preselectDefaultSms = false }: A
               <AppRow
                 key={app.packageName}
                 app={app}
-                checked={selected.includes(app.packageName)}
+                checked={selectedSet.has(app.packageName)}
                 onToggle={(next) => toggle(app.packageName, next)}
               />
             ))}

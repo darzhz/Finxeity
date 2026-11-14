@@ -142,9 +142,9 @@ export function BudgetsPage() {
 
   const [drawer, setDrawer] = useState<{ budget: Budget | null; categoryId?: string | null; amountMinor?: number } | null>(null)
 
-  const categoryList: Category[] = categories.data?.categories ?? []
+  const categoryList: Category[] = useMemo(() => categories.data?.categories ?? [], [categories.data])
   const nameOf = (id: string | null) => (id == null ? 'All spending' : (categoryList.find((c) => c.id === id)?.name ?? 'Category'))
-  const budgets: Budget[] = budgetsQ.data?.budgets ?? []
+  const budgets: Budget[] = useMemo(() => budgetsQ.data?.budgets ?? [], [budgetsQ.data])
 
   const { month, last, week } = useMemo(() => {
     const month = emptySpend()
@@ -202,16 +202,14 @@ export function BudgetsPage() {
     })
 
   // ideas: biggest categories last month that have no limit yet
-  const covered = new Set(budgets.map((b) => b.categoryId))
-  const ideas = useMemo(
-    () =>
-      [...last.byCat.entries()]
-        .filter(([id]) => !covered.has(id))
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([id, spent]) => ({ id, spent })),
-    [last, budgets], // eslint-disable-line react-hooks/exhaustive-deps
-  )
+  const ideas = useMemo(() => {
+    const covered = new Set(budgets.map((b) => b.categoryId))
+    return [...last.byCat.entries()]
+      .filter(([id]) => !covered.has(id))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([id, spent]) => ({ id, spent }))
+  }, [last, budgets])
 
   const loading = budgetsQ.isLoading || spendQ.isLoading
 
@@ -309,17 +307,50 @@ type Row = {
 /* ───────────────────────────── overview ─────────────────────────────
    The showy part: what's left across your limits, and how many are fine. */
 
-function Overview({ rows, month }: { rows: Row[]; month: { fraction: number; day: number; days: number } }) {
-  const monthly = rows.filter((r) => r.budget.period.toUpperCase() !== 'WEEKLY')
-  const overall = monthly.find((r) => r.budget.categoryId == null)
-  const considered = overall ? [overall] : monthly
-  const limit = considered.reduce((s, r) => s + r.budget.limitMinor, 0)
-  const spent = considered.reduce((s, r) => s + r.spent, 0)
-  const left = limit - spent
-  const shown = useCountUp(Math.abs(left))
+function statusCounts(rows: Row[]) {
+  const counts: Record<Status, number> = { ok: 0, risk: 0, over: 0 }
+  for (const row of rows) counts[row.status]++
+  return counts
+}
 
-  const counts = { ok: 0, risk: 0, over: 0 }
-  for (const r of rows) counts[r.status]++
+function overviewSummary(rows: Row[]) {
+  const monthly = rows.filter((row) => row.budget.period.toUpperCase() !== 'WEEKLY')
+  const overall = monthly.find((row) => row.budget.categoryId == null)
+  const considered = overall ? [overall] : monthly
+  const limit = considered.reduce((sum, row) => sum + row.budget.limitMinor, 0)
+  const spent = considered.reduce((sum, row) => sum + row.spent, 0)
+  const left = limit - spent
+  const counts = statusCounts(rows)
+  return {
+    monthlyCount: monthly.length,
+    overall: overall != null,
+    limit,
+    spent,
+    left,
+    counts,
+    pct: limit > 0 ? Math.min(1, spent / limit) : 0,
+    tone: left < 0 ? 'text-rose-400' : counts.risk > 0 ? 'text-amber-300' : 'text-emerald-400',
+  }
+}
+
+function StatusChips({ counts }: { counts: Record<Status, number> }) {
+  return (
+    <div className="mt-4 flex flex-wrap gap-2">
+      {(['ok', 'risk', 'over'] as Status[]).map(
+        (status) =>
+          counts[status] > 0 && (
+            <span key={status} className={cn('rounded-full px-2.5 py-1 text-xs font-medium', STATUS_STYLE[status].chip)}>
+              {counts[status]} {STATUS_STYLE[status].label.toLowerCase()}
+            </span>
+          ),
+      )}
+    </div>
+  )
+}
+
+function Overview({ rows, month }: { rows: Row[]; month: { fraction: number; day: number; days: number } }) {
+  const summary = overviewSummary(rows)
+  const shown = useCountUp(Math.abs(summary.left))
 
   const [ready, setReady] = useState(false)
   useEffect(() => {
@@ -327,40 +358,28 @@ function Overview({ rows, month }: { rows: Row[]; month: { fraction: number; day
     return () => cancelAnimationFrame(id)
   }, [])
 
-  const pct = limit > 0 ? Math.min(1, spent / limit) : 0
-  const tone = left < 0 ? 'text-rose-400' : counts.risk > 0 ? 'text-amber-300' : 'text-emerald-400'
-
-  if (monthly.length === 0) return null
+  if (summary.monthlyCount === 0) return null
 
   return (
     <section className="rounded-3xl border border-border bg-card p-5">
       <p className="text-sm text-muted-foreground">
-        {left < 0 ? 'Over your monthly limits by' : overall ? 'Left of your overall limit' : `Left across ${monthly.length} ${monthly.length === 1 ? 'limit' : 'limits'}`}
+        {summary.left < 0 ? 'Over your monthly limits by' : summary.overall ? 'Left of your overall limit' : `Left across ${summary.monthlyCount} ${summary.monthlyCount === 1 ? 'limit' : 'limits'}`}
       </p>
-      <p className={cn('font-display mt-1 text-4xl font-bold tracking-tight tabular-nums', tone)}>{formatMinor(shown)}</p>
+      <p className={cn('font-display mt-1 text-4xl font-bold tracking-tight tabular-nums', summary.tone)}>{formatMinor(shown)}</p>
       <p className="mt-1 text-sm text-muted-foreground">
-        {formatMinor(spent)} spent of {formatMinor(limit)}, day {month.day} of {month.days}
+        {formatMinor(summary.spent)} spent of {formatMinor(summary.limit)}, day {month.day} of {month.days}
       </p>
 
       <div className="relative mt-5 h-3 overflow-hidden rounded-full bg-muted">
         <div
-          className={cn('h-full rounded-full transition-[width] duration-1000 ease-out motion-reduce:transition-none', left < 0 ? 'bg-rose-400' : counts.risk > 0 ? 'bg-amber-400' : 'bg-emerald-400')}
-          style={{ width: ready ? `${pct * 100}%` : '0%' }}
+          className={cn('h-full rounded-full transition-[width] duration-1000 ease-out motion-reduce:transition-none', summary.left < 0 ? 'bg-rose-400' : summary.counts.risk > 0 ? 'bg-amber-400' : 'bg-emerald-400')}
+          style={{ width: ready ? `${summary.pct * 100}%` : '0%' }}
         />
         <span className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ left: `${Math.min(99, month.fraction * 100)}%` }} aria-hidden />
       </div>
       <p className="mt-1.5 text-xs text-muted-foreground">The line shows how far through the month you are.</p>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {(['ok', 'risk', 'over'] as Status[]).map(
-          (s) =>
-            counts[s] > 0 && (
-              <span key={s} className={cn('rounded-full px-2.5 py-1 text-xs font-medium', STATUS_STYLE[s].chip)}>
-                {counts[s]} {STATUS_STYLE[s].label.toLowerCase()}
-              </span>
-            ),
-        )}
-      </div>
+      <StatusChips counts={summary.counts} />
     </section>
   )
 }
@@ -445,7 +464,162 @@ function EmptyState({
 
 /* ───────────────────────────── add / edit drawer ───────────────────────────── */
 
-function BudgetDrawer({
+type BudgetDrawerState = { budget: Budget | null; categoryId?: string | null; amountMinor?: number } | null
+type BudgetOption = { id: string | null; name: string }
+
+function budgetOptions(categories: Category[], budgets: Budget[]): BudgetOption[] {
+  const taken = new Set(budgets.map((b) => b.categoryId))
+  return [
+    ...(taken.has(null) ? [] : [{ id: null, name: 'All spending' }]),
+    ...categories.filter((c) => !taken.has(c.id)).map((c) => ({ id: c.id, name: c.name })),
+  ]
+}
+
+function categoryName(categories: Category[], id: string | null) {
+  return id == null ? 'All spending' : (categories.find((c) => c.id === id)?.name ?? 'Category')
+}
+
+function budgetSuggestions(lastMonth: number) {
+  if (lastMonth <= 0) return []
+  return [
+    { label: 'Same as last month', minor: niceRound(lastMonth) },
+    { label: '10% less', minor: niceRound(lastMonth * 0.9) },
+    { label: '20% less', minor: niceRound(lastMonth * 0.8) },
+  ]
+}
+
+function budgetDrawerKey(state: BudgetDrawerState) {
+  if (!state) return 'closed'
+  if (state.budget) return `edit:${state.budget.id}`
+  return `new:${state.categoryId ?? 'auto'}:${state.amountMinor ?? 'none'}`
+}
+
+function BudgetCategoryPicker({
+  options,
+  catId,
+  onPick,
+}: {
+  options: BudgetOption[]
+  catId: string | null
+  onPick: (id: string | null) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <Label>What to cap</Label>
+      <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto py-0.5">
+        {options.map((option) => (
+          <button
+            key={option.id ?? 'all'}
+            type="button"
+            onClick={() => onPick(option.id)}
+            className={cn(
+              'inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-sm transition-all active:scale-95',
+              catId === option.id ? 'border-indigo-400/70 bg-indigo-500/20 font-medium' : 'border-border bg-card text-muted-foreground',
+            )}
+          >
+            <span>{option.id == null ? '💸' : emojiFor(option.name)}</span>
+            {option.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function BudgetLimitField({
+  limit,
+  onChange,
+  lastMonth,
+  suggestions,
+  catName,
+}: {
+  limit: string
+  onChange: (value: string) => void
+  lastMonth: number
+  suggestions: { label: string; minor: number }[]
+  catName: string
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-center text-xs text-muted-foreground">Monthly limit</p>
+      <div className="flex items-baseline justify-center gap-1.5">
+        <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
+        <input
+          inputMode="decimal"
+          value={limit}
+          onChange={(e) => onChange(e.target.value.replace(/[^\d.]/g, ''))}
+          placeholder="0"
+          aria-label="Monthly limit"
+          className="w-52 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
+        />
+      </div>
+      {suggestions.length > 0 ? (
+        <>
+          <p className="text-center text-xs text-muted-foreground">
+            You spent {formatMinor(lastMonth)} on {catName.toLowerCase()} last month.
+          </p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {suggestions.map((suggestion) => (
+              <button
+                key={suggestion.label}
+                type="button"
+                onClick={() => onChange((suggestion.minor / 100).toString())}
+                className="rounded-full border border-border bg-card px-3 py-1.5 text-xs active:scale-95"
+              >
+                <span className="font-medium">{suggestion.label}</span>
+                <span className="ml-1.5 tabular-nums text-muted-foreground">{formatMinor(suggestion.minor)}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="text-center text-xs text-muted-foreground">No spending here last month, so there is nothing to base a suggestion on.</p>
+      )}
+    </div>
+  )
+}
+
+function budgetDrawerCopy(budget: Budget | null, selectedName: string) {
+  if (!budget) {
+    return { title: 'New spending limit', description: 'Pick what to cap and how much per month.', save: 'Add limit' }
+  }
+  return {
+    title: `${selectedName} limit`,
+    description: 'Change the monthly cap, or remove it.',
+    save: 'Save changes',
+  }
+}
+
+function BudgetDrawerFooter({
+  nothingLeft,
+  canSave,
+  saveLabel,
+  pending,
+  onSave,
+  onClose,
+}: {
+  nothingLeft: boolean
+  canSave: boolean
+  saveLabel: string
+  pending: boolean
+  onSave: () => void
+  onClose: () => void
+}) {
+  return (
+    <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+      {!nothingLeft && (
+        <Button className="h-12 text-base" disabled={!canSave || pending} onClick={onSave}>
+          {pending ? 'Saving…' : saveLabel}
+        </Button>
+      )}
+      <Button variant="ghost" onClick={onClose}>
+        {nothingLeft ? 'Close' : 'Cancel'}
+      </Button>
+    </DrawerFooter>
+  )
+}
+
+function BudgetDrawerBody({
   state,
   categories,
   budgets,
@@ -455,7 +629,7 @@ function BudgetDrawer({
   onSave,
   onRemove,
 }: {
-  state: { budget: Budget | null; categoryId?: string | null; amountMinor?: number } | null
+  state: BudgetDrawerState
   categories: Category[]
   budgets: Budget[]
   lastSpend: Spend
@@ -465,149 +639,92 @@ function BudgetDrawer({
   onRemove: (b: Budget) => void
 }) {
   const budget = state?.budget ?? null
-  const [catId, setCatId] = useState<string | null>(null)
-  const [limit, setLimit] = useState('')
+  const options = budgetOptions(categories, budgets)
+  const [catId, setCatId] = useState<string | null>(() => {
+    if (budget) return budget.categoryId
+    if (state?.categoryId !== undefined) return state.categoryId
+    return options[0]?.id ?? null
+  })
+  const [limit, setLimit] = useState(() => {
+    if (budget) return (budget.limitMinor / 100).toFixed(2)
+    return state?.amountMinor ? (state.amountMinor / 100).toString() : ''
+  })
   const [confirmRemove, setConfirmRemove] = useState(false)
-
-  const taken = new Set(budgets.map((b) => b.categoryId))
-  const options: { id: string | null; name: string }[] = [
-    ...(taken.has(null) ? [] : [{ id: null, name: 'All spending' }]),
-    ...categories.filter((c) => !taken.has(c.id)).map((c) => ({ id: c.id, name: c.name })),
-  ]
-
-  useEffect(() => {
-    if (!state) return
-    setConfirmRemove(false)
-    if (state.budget) {
-      setCatId(state.budget.categoryId)
-      setLimit((state.budget.limitMinor / 100).toFixed(2))
-    } else {
-      const first = options[0]?.id ?? null
-      setCatId(state.categoryId !== undefined ? state.categoryId : first)
-      setLimit(state.amountMinor ? (state.amountMinor / 100).toString() : '')
-    }
-  }, [state]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const limitMinor = parseMajorToMinor(limit) ?? 0
   const lastMonth = spentIn(lastSpend, catId)
-  const suggestions =
-    lastMonth > 0
-      ? [
-          { label: 'Same as last month', minor: niceRound(lastMonth) },
-          { label: '10% less', minor: niceRound(lastMonth * 0.9) },
-          { label: '20% less', minor: niceRound(lastMonth * 0.8) },
-        ]
-      : []
-
-  const catName = (id: string | null) => (id == null ? 'All spending' : (categories.find((c) => c.id === id)?.name ?? 'Category'))
+  const suggestions = budgetSuggestions(lastMonth)
+  const selectedName = categoryName(categories, catId)
+  const copy = budgetDrawerCopy(budget, selectedName)
   const nothingLeft = !budget && options.length === 0
 
   return (
-    <Drawer open={state !== null} onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="pb-2">
-          <DrawerTitle>{budget ? `${catName(budget.categoryId)} limit` : 'New spending limit'}</DrawerTitle>
-          <DrawerDescription>{budget ? 'Change the monthly cap, or remove it.' : 'Pick what to cap and how much per month.'}</DrawerDescription>
-        </DrawerHeader>
+    <>
+      <DrawerHeader className="pb-2">
+        <DrawerTitle>{copy.title}</DrawerTitle>
+        <DrawerDescription>{copy.description}</DrawerDescription>
+      </DrawerHeader>
 
-        <div className="space-y-5 overflow-y-auto px-4 pb-2">
-          {nothingLeft ? (
-            <p className="rounded-2xl bg-muted/60 p-4 text-sm text-muted-foreground">Every category already has a limit. Tap one in the list to change it.</p>
-          ) : (
-            <>
-              {!budget && (
-                <div className="space-y-2">
-                  <Label>What to cap</Label>
-                  <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto py-0.5">
-                    {options.map((o) => (
-                      <button
-                        key={o.id ?? 'all'}
-                        type="button"
-                        onClick={() => setCatId(o.id)}
-                        className={cn(
-                          'inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-sm transition-all active:scale-95',
-                          catId === o.id ? 'border-indigo-400/70 bg-indigo-500/20 font-medium' : 'border-border bg-card text-muted-foreground',
-                        )}
-                      >
-                        <span>{o.id == null ? '💸' : emojiFor(o.name)}</span>
-                        {o.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+      <div className="space-y-5 overflow-y-auto px-4 pb-2">
+        {nothingLeft ? (
+          <p className="rounded-2xl bg-muted/60 p-4 text-sm text-muted-foreground">Every category already has a limit. Tap one in the list to change it.</p>
+        ) : (
+          <>
+            {!budget && <BudgetCategoryPicker options={options} catId={catId} onPick={setCatId} />}
+            <BudgetLimitField
+              limit={limit}
+              onChange={setLimit}
+              lastMonth={lastMonth}
+              suggestions={suggestions}
+              catName={selectedName}
+            />
+          </>
+        )}
 
-              <div className="space-y-2">
-                <p className="text-center text-xs text-muted-foreground">Monthly limit</p>
-                <div className="flex items-baseline justify-center gap-1.5">
-                  <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
-                  <input
-                    inputMode="decimal"
-                    value={limit}
-                    onChange={(e) => setLimit(e.target.value.replace(/[^\d.]/g, ''))}
-                    placeholder="0"
-                    aria-label="Monthly limit"
-                    className="w-52 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
-                  />
-                </div>
-                {suggestions.length > 0 ? (
-                  <>
-                    <p className="text-center text-xs text-muted-foreground">
-                      You spent {formatMinor(lastMonth)} on {catName(catId).toLowerCase()} last month.
-                    </p>
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {suggestions.map((s) => (
-                        <button
-                          key={s.label}
-                          type="button"
-                          onClick={() => setLimit((s.minor / 100).toString())}
-                          className="rounded-full border border-border bg-card px-3 py-1.5 text-xs active:scale-95"
-                        >
-                          <span className="font-medium">{s.label}</span>
-                          <span className="ml-1.5 tabular-nums text-muted-foreground">{formatMinor(s.minor)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-center text-xs text-muted-foreground">No spending here last month, so there is nothing to base a suggestion on.</p>
-                )}
-              </div>
-            </>
-          )}
-
-          {budget && (
-            <Button
-              variant="ghost"
-              className={cn('w-full', confirmRemove ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
-              disabled={pending}
-              onClick={() => (confirmRemove ? onRemove(budget) : setConfirmRemove(true))}
-            >
-              {confirmRemove ? 'Tap again to remove this limit' : 'Remove limit'}
-            </Button>
-          )}
-        </div>
-
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-          {!nothingLeft && (
-            <Button
-              className="h-12 text-base"
-              disabled={limitMinor <= 0 || pending}
-              onClick={() =>
-                onSave(
-                  { id: budget?.id, categoryId: catId, period: budget?.period ?? 'MONTHLY', limitMinor } as BudgetInput,
-                  budget ? 'Limit updated' : 'Limit added',
-                  onClose,
-                )
-              }
-            >
-              {pending ? 'Saving…' : budget ? 'Save changes' : 'Add limit'}
-            </Button>
-          )}
-          <Button variant="ghost" onClick={onClose}>
-            {nothingLeft ? 'Close' : 'Cancel'}
+        {budget && (
+          <Button
+            variant="ghost"
+            className={cn('w-full', confirmRemove ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
+            disabled={pending}
+            onClick={() => (confirmRemove ? onRemove(budget) : setConfirmRemove(true))}
+          >
+            {confirmRemove ? 'Tap again to remove this limit' : 'Remove limit'}
           </Button>
-        </DrawerFooter>
+        )}
+      </div>
+
+      <BudgetDrawerFooter
+        nothingLeft={nothingLeft}
+        canSave={limitMinor > 0}
+        saveLabel={copy.save}
+        pending={pending}
+        onSave={() =>
+          onSave(
+            { id: budget?.id, categoryId: catId, period: budget?.period ?? 'MONTHLY', limitMinor } as BudgetInput,
+            budget ? 'Limit updated' : 'Limit added',
+            onClose,
+          )
+        }
+        onClose={onClose}
+      />
+    </>
+  )
+}
+
+function BudgetDrawer(props: {
+  state: BudgetDrawerState
+  categories: Category[]
+  budgets: Budget[]
+  lastSpend: Spend
+  pending: boolean
+  onClose: () => void
+  onSave: (input: BudgetInput, message: string, done: () => void) => void
+  onRemove: (b: Budget) => void
+}) {
+  return (
+    <Drawer open={props.state !== null} onOpenChange={(open) => !open && props.onClose()}>
+      <DrawerContent className="max-h-[92dvh]">
+        <BudgetDrawerBody key={budgetDrawerKey(props.state)} {...props} />
       </DrawerContent>
     </Drawer>
   )

@@ -1,32 +1,25 @@
 import { useEffect } from 'react'
 import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
+import { subscribeToListeners } from '@/lib/subscriptions'
 import { useNavigate, useLocation } from 'react-router'
 
-/**
- * Android hardware back: go back in the router, otherwise minimize the app.
- */
 export function useNativeBack() {
   const navigate = useNavigate()
   const location = useLocation()
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
-    let removeHandle: (() => void) | undefined
 
-    App.addListener('backButton', ({ canGoBack }) => {
-      const atRoot = location.pathname === '/' || location.pathname === '/dashboard'
-      if (canGoBack && !atRoot) {
-        navigate(-1)
-      } else {
-        App.minimizeApp()
-      }
-    }).then((handle) => {
-      removeHandle = () => handle.remove()
-    })
-
-    return () => {
-      removeHandle?.()
-    }
+    return subscribeToListeners(() =>
+      App.addListener('backButton', ({ canGoBack }) => {
+        const atRoot = location.pathname === '/' || location.pathname === '/dashboard'
+        if (canGoBack && !atRoot) {
+          navigate(-1)
+        } else {
+          void App.minimizeApp()
+        }
+      }),
+    )
   }, [navigate, location.pathname])
 }

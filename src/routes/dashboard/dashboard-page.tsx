@@ -5,7 +5,7 @@ import { ArrowDownLeft, ArrowUpRight, BellRing, Check, ChevronLeft, ChevronRight
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { LocalExpense } from '@/lib/plugin'
-import type { Commitment, Dashboard, Goal, Transaction } from '@/lib/plugin'
+import type { Commitment, Dashboard, Forecast, Goal, Transaction } from '@/lib/plugin'
 import { formatMinor } from '@/lib/money'
 import { formatMonth, formatRelativeTime } from '@/lib/format'
 import { queryKeys, type TransactionFilters } from '@/lib/query'
@@ -145,12 +145,59 @@ export function DashboardPage() {
     )
   }
 
-  const listenerState = listener.data?.state ?? 'UNKNOWN'
-  const isEmpty = data.accounts.length === 0 && data.topMerchants.length === 0
-  const cmts = commitments.data?.commitments ?? []
   const recent = (recentTxns.data?.items ?? [])
-    .filter((t) => !selectedAccount || t.accountId === selectedAccount)
+    .filter((transaction) => !selectedAccount || transaction.accountId === selectedAccount)
     .slice(0, 6)
+
+  return (
+    <DashboardView
+      data={data}
+      commitments={commitments.data?.commitments ?? []}
+      recent={recent}
+      forecast={forecast.data}
+      goals={goals.data?.goals ?? []}
+      listenerState={listener.data?.state ?? 'UNKNOWN'}
+      rangeDays={rangeDays}
+      onRange={setRangeDays}
+      selectedAccount={selectedAccount}
+      onAccount={setSelectedAccount}
+      refreshing={dashboard.isFetching}
+      onRefresh={() => {
+        void dashboard.refetch()
+        void recentTxns.refetch()
+      }}
+    />
+  )
+}
+
+function DashboardView({
+  data,
+  commitments,
+  recent,
+  forecast,
+  goals,
+  listenerState,
+  rangeDays,
+  onRange,
+  selectedAccount,
+  onAccount,
+  refreshing,
+  onRefresh,
+}: {
+  data: Dashboard
+  commitments: Commitment[]
+  recent: Transaction[]
+  forecast: Forecast | undefined
+  goals: Goal[]
+  listenerState: string
+  rangeDays: number
+  onRange: (days: number) => void
+  selectedAccount: string | null
+  onAccount: (id: string | null) => void
+  refreshing: boolean
+  onRefresh: () => void
+}) {
+  const isEmpty = data.accounts.length === 0 && data.topMerchants.length === 0
 
   return (
     <div className="h-full overflow-y-auto">
@@ -166,113 +213,132 @@ export function DashboardPage() {
         <Header
           listenerState={listenerState}
           rangeDays={rangeDays}
-          setRangeDays={setRangeDays}
+          setRangeDays={onRange}
           accounts={isEmpty ? [] : data.accounts}
           selectedAccount={selectedAccount}
-          setSelectedAccount={setSelectedAccount}
+          setSelectedAccount={onAccount}
         />
 
         <div className="space-y-7 px-4 pb-10 pt-2">
           {isEmpty ? (
             <FirstRunCard listenerState={listenerState} />
           ) : (
-            <>
-              <BalanceHero data={data} selectedAccount={selectedAccount} />
-
-              <Attention needsReview={data.needsReview} commitments={cmts} />
-
-              {data.categories.length > 0 && (
-                <Section title="Where it went" aside={formatMinor(data.categories.reduce((s, c) => s + c.spendMinor, 0))}>
-                  <SpendingCard categories={data.categories} />
-                </Section>
-              )}
-
-              {data.cashflow.length > 1 && (
-                <Section title="Spending trend">
-                  <TrendCard cashflow={data.cashflow} />
-                </Section>
-              )}
-
-              <Section title="Spending patterns">
-                <PatternsCard selectedAccount={selectedAccount} />
-              </Section>
-
-              {forecast.data && forecast.data.points.length > 1 && (
-                <Section title="Where your balance is heading">
-                  <ForecastCard forecast={forecast.data} />
-                </Section>
-              )}
-
-              {cmts.length > 0 && (
-                <Section title="Coming up" aside={`${formatMinor(cmts.reduce((s, c) => s + c.amountMinor, 0))} due`}>
-                  <BillsCard commitments={cmts} />
-                </Section>
-              )}
-
-              {(goals.data?.goals.length ?? 0) > 0 && (
-                <Section
-                  title="Savings goals"
-                  aside={
-                    <Link to="/goals" className="font-medium text-indigo-400">
-                      New goal
-                    </Link>
-                  }
-                >
-                  <GoalsCard goals={goals.data!.goals} />
-                </Section>
-              )}
-
-              {data.topMerchants.length > 0 && (
-                <Section title="Top merchants">
-                  <MerchantsCard merchants={data.topMerchants} />
-                </Section>
-              )}
-
-              {data.accounts.length > 0 && (
-                <Section title="Accounts" aside="Tap to filter">
-                  <AccountsRow
-                    accounts={data.accounts}
-                    selected={selectedAccount}
-                    onSelect={(id) => setSelectedAccount((cur) => (cur === id ? null : id))}
-                  />
-                </Section>
-              )}
-
-              {data.savings.items.length > 0 && (
-                <Section title="Ideas to save">
-                  <InsightsCard items={data.savings.items} />
-                </Section>
-              )}
-
-              {recent.length > 0 && (
-                <Section
-                  title="Recent activity"
-                  aside={
-                    <Link to="/transactions" className="font-medium text-indigo-400">
-                      See all
-                    </Link>
-                  }
-                >
-                  <RecentCard transactions={recent} />
-                </Section>
-              )}
-            </>
+            <DashboardSections
+              data={data}
+              commitments={commitments}
+              recent={recent}
+              forecast={forecast}
+              goals={goals}
+              selectedAccount={selectedAccount}
+              onAccount={onAccount}
+            />
           )}
 
-          <button
-            type="button"
-            onClick={() => {
-              void dashboard.refetch()
-              void recentTxns.refetch()
-            }}
-            className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground active:text-foreground"
-          >
-            <RefreshCw className={cn('size-3', dashboard.isFetching && 'animate-spin')} />
+          <button type="button" onClick={onRefresh} className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground active:text-foreground">
+            <RefreshCw className={cn('size-3', refreshing && 'animate-spin')} />
             Updated {formatRelativeTime(data.lastUpdatedAt)}
           </button>
         </div>
       </div>
     </div>
+  )
+}
+
+function DashboardSections({
+  data,
+  commitments,
+  recent,
+  forecast,
+  goals,
+  selectedAccount,
+  onAccount,
+}: {
+  data: Dashboard
+  commitments: Commitment[]
+  recent: Transaction[]
+  forecast: Forecast | undefined
+  goals: Goal[]
+  selectedAccount: string | null
+  onAccount: (id: string | null) => void
+}) {
+  return (
+    <>
+      <BalanceHero data={data} selectedAccount={selectedAccount} />
+
+      <Attention needsReview={data.needsReview} commitments={commitments} />
+
+      {data.categories.length > 0 && (
+        <Section title="Where it went" aside={formatMinor(data.categories.reduce((sum, category) => sum + category.spendMinor, 0))}>
+          <SpendingCard categories={data.categories} />
+        </Section>
+      )}
+
+      {data.cashflow.length > 1 && (
+        <Section title="Spending trend">
+          <TrendCard cashflow={data.cashflow} />
+        </Section>
+      )}
+
+      <Section title="Spending patterns">
+        <PatternsCard selectedAccount={selectedAccount} />
+      </Section>
+
+      {forecast && forecast.points.length > 1 && (
+        <Section title="Where your balance is heading">
+          <ForecastCard forecast={forecast} />
+        </Section>
+      )}
+
+      {commitments.length > 0 && (
+        <Section title="Coming up" aside={`${formatMinor(commitments.reduce((sum, commitment) => sum + commitment.amountMinor, 0))} due`}>
+          <BillsCard commitments={commitments} />
+        </Section>
+      )}
+
+      {goals.length > 0 && (
+        <Section
+          title="Savings goals"
+          aside={
+            <Link to="/goals" className="font-medium text-indigo-400">
+              New goal
+            </Link>
+          }
+        >
+          <GoalsCard goals={goals} />
+        </Section>
+      )}
+
+      {data.topMerchants.length > 0 && (
+        <Section title="Top merchants">
+          <MerchantsCard merchants={data.topMerchants} />
+        </Section>
+      )}
+
+      {data.accounts.length > 0 && (
+        <Section title="Accounts" aside="Tap to filter">
+          <AccountsRow accounts={data.accounts} selected={selectedAccount} onSelect={(id) => onAccount(selectedAccount === id ? null : id)} />
+        </Section>
+      )}
+
+      {data.savings.items.length > 0 && (
+        <Section title="Ideas to save">
+          <InsightsCard items={data.savings.items} />
+        </Section>
+      )}
+
+      {recent.length > 0 && (
+        <Section
+          title="Recent activity"
+          aside={
+            <Link to="/transactions" className="font-medium text-indigo-400">
+              See all
+            </Link>
+          }
+        >
+          <RecentCard transactions={recent} />
+        </Section>
+      )}
+    </>
   )
 }
 
@@ -600,7 +666,7 @@ function SpendingCard({ categories }: { categories: Dashboard['categories'] }) {
                   stroke={SLICE_COLORS[i % SLICE_COLORS.length]}
                   strokeDasharray={`${dash} ${100 - dash}`}
                   strokeDashoffset={-offset}
-                  className="cursor-pointer transition-all duration-200"
+                  className="cursor-pointer transition-[stroke-width,opacity] duration-200"
                   opacity={active == null || active === i ? 1 : 0.3}
                   onClick={() => setActive(active === i ? null : i)}
                 />
@@ -693,7 +759,7 @@ function TrendCard({ cashflow }: { cashflow: Dashboard['cashflow'] }) {
             >
               <div
                 className={cn(
-                  'w-full rounded-t-md transition-all duration-200',
+                  'w-full rounded-t-md transition-[height,background-color,opacity] duration-200',
                   high ? 'bg-rose-400/80' : 'bg-indigo-400/60',
                   active === i && (high ? 'bg-rose-400' : 'bg-indigo-400'),
                   active != null && active !== i && 'opacity-50',
@@ -1117,7 +1183,7 @@ function WeekRhythm({ selectedAccount }: { selectedAccount: string | null }) {
       </div>
       <div className="grid grid-cols-7 gap-1.5">
         {stats.avg.map((v, i) => (
-          <div key={i} className="space-y-1.5 text-center">
+          <div key={WEEKDAYS[i]} className="space-y-1.5 text-center">
             <div
               className={cn(
                 'flex h-16 items-center justify-center rounded-xl text-xs font-semibold tabular-nums',
@@ -1142,13 +1208,160 @@ function WeekRhythm({ selectedAccount }: { selectedAccount: string | null }) {
   )
 }
 
+type DaySpend = Map<string, { total: number; items: Transaction[] }>
+type BusiestDay = { day: number; total: number } | null
+
+function busiestDay(month: Date, daysInMonth: number, byDay: DaySpend): BusiestDay {
+  let busiest: BusiestDay = null
+  for (let day = 1; day <= daysInMonth; day++) {
+    const total = byDay.get(dayKey(new Date(month.getFullYear(), month.getMonth(), day).getTime()))?.total ?? 0
+    if (total > (busiest?.total ?? 0)) busiest = { day, total }
+  }
+  return busiest
+}
+
+function parseDayKey(selected: string | null) {
+  if (!selected) return null
+  const [year, month, day] = selected.split('-').map(Number)
+  return new Date(year, month, day)
+}
+
+function monthSummary(loading: boolean, total: number, busiest: BusiestDay) {
+  if (loading) return 'Loading…'
+  if (total > 0) return `${formatMinor(total)} spent${busiest ? `, busiest on the ${busiest.day}${ordinal(busiest.day)}` : ''}`
+  return 'No spending this month'
+}
+
+function CalendarHeader({
+  month,
+  loading,
+  total,
+  busiest,
+  offset,
+  onPrevious,
+  onNext,
+}: {
+  month: Date
+  loading: boolean
+  total: number
+  busiest: BusiestDay
+  offset: number
+  onPrevious: () => void
+  onNext: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <Button variant="ghost" size="icon" className="size-9 rounded-full" onClick={onPrevious} aria-label="Previous month">
+        <ChevronLeft className="size-4" />
+      </Button>
+      <div className="text-center">
+        <p className="text-sm font-semibold">{month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</p>
+        <p className="text-xs text-muted-foreground">{monthSummary(loading, total, busiest)}</p>
+      </div>
+      <Button variant="ghost" size="icon" className="size-9 rounded-full" onClick={onNext} disabled={offset >= 0} aria-label="Next month">
+        <ChevronRight className="size-4" />
+      </Button>
+    </div>
+  )
+}
+
+function CalendarGrid({
+  month,
+  lead,
+  daysInMonth,
+  byDay,
+  max,
+  todayStart,
+  selected,
+  onSelect,
+}: {
+  month: Date
+  lead: number
+  daysInMonth: number
+  byDay: DaySpend
+  max: number
+  todayStart: number
+  selected: string | null
+  onSelect: (key: string) => void
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-7 gap-1.5 text-center text-[0.7rem] text-muted-foreground">
+        {WEEKDAYS.map((day) => (
+          <span key={day}>{day[0]}</span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-1.5">
+        {Array.from({ length: lead }).map((_, index) => (
+          <span key={`b${index}`} />
+        ))}
+        {Array.from({ length: daysInMonth }).map((_, index) => {
+          const day = index + 1
+          const date = new Date(month.getFullYear(), month.getMonth(), day)
+          const key = dayKey(date.getTime())
+          const total = byDay.get(key)?.total ?? 0
+          const future = date.getTime() > todayStart
+          const isToday = date.getTime() === todayStart
+          return (
+            <button
+              key={day}
+              type="button"
+              disabled={future}
+              onClick={() => onSelect(key)}
+              aria-label={`${date.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}: ${formatMinor(total)}`}
+              className={cn(
+                'flex aspect-square items-center justify-center rounded-lg text-xs tabular-nums transition-transform active:scale-90',
+                HEAT[heatLevel(total, max)],
+                future && 'opacity-25',
+                isToday && 'font-bold',
+                selected === key ? 'ring-2 ring-foreground/80' : isToday && 'ring-1 ring-indigo-300/70',
+              )}
+            >
+              {day}
+            </button>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+function DayDetail({ selectedDate, detail }: { selectedDate: Date; detail: { total: number; items: Transaction[] } | null }) {
+  return (
+    <div className="rounded-2xl bg-muted/50 p-3">
+      <div className="flex items-baseline justify-between">
+        <p className="text-sm font-medium">{selectedDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}</p>
+        <p className="text-sm font-semibold tabular-nums">{formatMinor(detail?.total ?? 0)}</p>
+      </div>
+      {detail ? <DayItems items={detail.items} /> : <p className="mt-1 text-xs text-muted-foreground">Nothing spent this day.</p>}
+    </div>
+  )
+}
+
+function DayItems({ items }: { items: Transaction[] }) {
+  return (
+    <ul className="mt-2 space-y-1.5">
+      {[...items]
+        .sort((a, b) => b.amountMinor - a.amountMinor)
+        .slice(0, 3)
+        .map((transaction) => (
+          <li key={transaction.id} className="flex items-center justify-between gap-3 text-sm">
+            <span className="truncate text-muted-foreground">{transaction.merchantName ?? 'Unknown merchant'}</span>
+            <span className="shrink-0 tabular-nums">{formatMinor(transaction.amountMinor)}</span>
+          </li>
+        ))}
+      {items.length > 3 && <li className="text-xs text-muted-foreground">and {items.length - 3} more</li>}
+    </ul>
+  )
+}
+
 function MonthCalendar({ selectedAccount }: { selectedAccount: string | null }) {
   const [offset, setOffset] = useState(0)
-  const [selected, setSelected] = useState<string | null>(dayKey(Date.now()))
+  const [selected, setSelected] = useState<string | null>(() => dayKey(Date.now()))
 
   const month = useMemo(() => {
-    const n = new Date()
-    return new Date(n.getFullYear(), n.getMonth() + offset, 1)
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth() + offset, 1)
   }, [offset])
   const from = month.getTime()
   const to = new Date(month.getFullYear(), month.getMonth() + 1, 1).getTime() - 1
@@ -1160,14 +1373,14 @@ function MonthCalendar({ selectedAccount }: { selectedAccount: string | null }) 
   })
 
   const byDay = useMemo(() => {
-    const map = new Map<string, { total: number; items: Transaction[] }>()
-    for (const t of q.data ?? []) {
-      if (selectedAccount && t.accountId !== selectedAccount) continue
-      const k = dayKey(t.occurredAt)
-      const entry = map.get(k) ?? { total: 0, items: [] }
-      entry.total += t.amountMinor
-      entry.items.push(t)
-      map.set(k, entry)
+    const map: DaySpend = new Map()
+    for (const transaction of q.data ?? []) {
+      if (selectedAccount && transaction.accountId !== selectedAccount) continue
+      const key = dayKey(transaction.occurredAt)
+      const entry = map.get(key) ?? { total: 0, items: [] }
+      entry.total += transaction.amountMinor
+      entry.items.push(transaction)
+      map.set(key, entry)
     }
     return map
   }, [q.data, selectedAccount])
@@ -1175,14 +1388,12 @@ function MonthCalendar({ selectedAccount }: { selectedAccount: string | null }) 
   const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate()
   const lead = mondayIndex(month)
   const todayStart = startOfDay(Date.now())
-  const values = [...byDay.values()].map((v) => v.total)
+  const values = [...byDay.values()].map((value) => value.total)
   const max = Math.max(0, ...values)
-  const monthTotal = values.reduce((s, v) => s + v, 0)
-  let busiest: { day: number; total: number } | null = null
-  for (let d = 1; d <= daysInMonth; d++) {
-    const total = byDay.get(dayKey(new Date(month.getFullYear(), month.getMonth(), d).getTime()))?.total ?? 0
-    if (total > (busiest?.total ?? 0)) busiest = { day: d, total }
-  }
+  const monthTotal = values.reduce((sum, value) => sum + value, 0)
+  const busiest = busiestDay(month, daysInMonth, byDay)
+  const selectedDate = parseDayKey(selected)
+  const detail = selected ? (byDay.get(selected) ?? null) : null
 
   const go = (delta: number) => {
     const next = Math.min(0, offset + delta)
@@ -1190,105 +1401,34 @@ function MonthCalendar({ selectedAccount }: { selectedAccount: string | null }) 
     setSelected(next === 0 ? dayKey(Date.now()) : null)
   }
 
-  const detail = selected ? byDay.get(selected) : null
-  const selectedDate = selected
-    ? (() => {
-        const [y, m, d] = selected.split('-').map(Number)
-        return new Date(y, m, d)
-      })()
-    : null
-
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <Button variant="ghost" size="icon" className="size-9 rounded-full" onClick={() => go(-1)} aria-label="Previous month">
-          <ChevronLeft className="size-4" />
-        </Button>
-        <div className="text-center">
-          <p className="text-sm font-semibold">{month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</p>
-          <p className="text-xs text-muted-foreground">
-            {q.isLoading
-              ? 'Loading…'
-              : monthTotal > 0
-                ? `${formatMinor(monthTotal)} spent${busiest ? `, busiest on the ${busiest.day}${ordinal(busiest.day)}` : ''}`
-                : 'No spending this month'}
-          </p>
-        </div>
-        <Button variant="ghost" size="icon" className="size-9 rounded-full" onClick={() => go(1)} disabled={offset >= 0} aria-label="Next month">
-          <ChevronRight className="size-4" />
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-7 gap-1.5 text-center text-[0.7rem] text-muted-foreground">
-        {WEEKDAYS.map((d) => (
-          <span key={d}>{d[0]}</span>
-        ))}
-      </div>
+      <CalendarHeader
+        month={month}
+        loading={q.isLoading}
+        total={monthTotal}
+        busiest={busiest}
+        offset={offset}
+        onPrevious={() => go(-1)}
+        onNext={() => go(1)}
+      />
 
       {q.isLoading ? (
         <Skeleton className="h-52 w-full rounded-2xl" />
       ) : (
-        <div className="grid grid-cols-7 gap-1.5">
-          {Array.from({ length: lead }).map((_, i) => (
-            <span key={`b${i}`} />
-          ))}
-          {Array.from({ length: daysInMonth }).map((_, i) => {
-            const day = i + 1
-            const date = new Date(month.getFullYear(), month.getMonth(), day)
-            const key = dayKey(date.getTime())
-            const total = byDay.get(key)?.total ?? 0
-            const future = date.getTime() > todayStart
-            const isToday = date.getTime() === todayStart
-            return (
-              <button
-                key={day}
-                type="button"
-                disabled={future}
-                onClick={() => setSelected(selected === key ? null : key)}
-                aria-label={`${date.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}: ${formatMinor(total)}`}
-                className={cn(
-                  'flex aspect-square items-center justify-center rounded-lg text-xs tabular-nums transition-transform active:scale-90',
-                  HEAT[heatLevel(total, max)],
-                  future && 'opacity-25',
-                  isToday && 'font-bold',
-                  selected === key ? 'ring-2 ring-foreground/80' : isToday && 'ring-1 ring-indigo-300/70',
-                )}
-              >
-                {day}
-              </button>
-            )
-          })}
-        </div>
+        <CalendarGrid
+          month={month}
+          lead={lead}
+          daysInMonth={daysInMonth}
+          byDay={byDay}
+          max={max}
+          todayStart={todayStart}
+          selected={selected}
+          onSelect={(key) => setSelected((current) => (current === key ? null : key))}
+        />
       )}
 
-      {selectedDate && !q.isLoading && (
-        <div className="rounded-2xl bg-muted/50 p-3">
-          <div className="flex items-baseline justify-between">
-            <p className="text-sm font-medium">
-              {selectedDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}
-            </p>
-            <p className="text-sm font-semibold tabular-nums">{formatMinor(detail?.total ?? 0)}</p>
-          </div>
-          {detail ? (
-            <ul className="mt-2 space-y-1.5">
-              {[...detail.items]
-                .sort((a, b) => b.amountMinor - a.amountMinor)
-                .slice(0, 3)
-                .map((t) => (
-                  <li key={t.id} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="truncate text-muted-foreground">{t.merchantName ?? 'Unknown merchant'}</span>
-                    <span className="shrink-0 tabular-nums">{formatMinor(t.amountMinor)}</span>
-                  </li>
-                ))}
-              {detail.items.length > 3 && (
-                <li className="text-xs text-muted-foreground">and {detail.items.length - 3} more</li>
-              )}
-            </ul>
-          ) : (
-            <p className="mt-1 text-xs text-muted-foreground">Nothing spent this day.</p>
-          )}
-        </div>
-      )}
+      {selectedDate && !q.isLoading && <DayDetail selectedDate={selectedDate} detail={detail} />}
 
       <HeatLegend />
     </div>

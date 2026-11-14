@@ -1,8 +1,32 @@
 "use client"
 
 import * as React from "react"
-import * as RechartsPrimitive from "recharts"
 import { cn } from "cn"
+
+type RechartsModule = typeof import("recharts")
+
+let rechartsPromise: Promise<RechartsModule> | null = null
+
+function loadRecharts(): Promise<RechartsModule> {
+  rechartsPromise ??= import("recharts")
+  return rechartsPromise
+}
+
+function useRecharts(): RechartsModule | null {
+  const [module, setModule] = React.useState<RechartsModule | null>(null)
+
+  React.useEffect(() => {
+    let active = true
+    void loadRecharts().then((loaded) => {
+      if (active) setModule(loaded)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  return module
+}
 
 export interface ChartConfig {
   [key: string]: {
@@ -39,22 +63,31 @@ function ChartContainer({
   config: ChartConfig
   children: React.ReactElement
 }) {
+  const Recharts = useRecharts()
+  const value = React.useMemo(() => ({ config }), [config])
+
   return (
-    <ChartContext.Provider value={{ config }}>
+    <ChartContext.Provider value={value}>
       <div
         data-slot="chart"
         className={cn("flex aspect-video justify-center text-xs", className)}
         {...props}
       >
-        <RechartsPrimitive.ResponsiveContainer width="100%" height="100%">
-          {children}
-        </RechartsPrimitive.ResponsiveContainer>
+        {Recharts ? (
+          <Recharts.ResponsiveContainer width="100%" height="100%">
+            {children}
+          </Recharts.ResponsiveContainer>
+        ) : null}
       </div>
     </ChartContext.Provider>
   )
 }
 
-const ChartTooltip = RechartsPrimitive.Tooltip
+function ChartTooltip(props: Record<string, unknown>) {
+  const Recharts = useRecharts()
+  if (!Recharts) return null
+  return React.createElement(Recharts.Tooltip as unknown as React.ComponentType<Record<string, unknown>>, props)
+}
 
 function ChartTooltipContent({
   active,
@@ -87,8 +120,8 @@ function ChartTooltipContent({
         <div className="font-medium">{labelFormatter ? labelFormatter(label) : label}</div>
       )}
       <div className="grid gap-1.5">
-        {payload.map((item, index) => {
-          const key = String(item.dataKey ?? item.name ?? index)
+        {payload.map((item) => {
+          const key = String(item.dataKey ?? item.name ?? item.value)
           const entry = config[key]
           const value = formatter
             ? formatter(item.value, item.name)
@@ -109,7 +142,11 @@ function ChartTooltipContent({
   )
 }
 
-const ChartLegend = RechartsPrimitive.Legend
+function ChartLegend(props: Record<string, unknown>) {
+  const Recharts = useRecharts()
+  if (!Recharts) return null
+  return React.createElement(Recharts.Legend as unknown as React.ComponentType<Record<string, unknown>>, props)
+}
 
 function ChartLegendContent({
   payload,
@@ -123,8 +160,8 @@ function ChartLegendContent({
 
   return (
     <div className={cn("flex items-center justify-center gap-4", className)}>
-      {payload.map((item, index) => {
-        const key = String(item.dataKey ?? item.value ?? index)
+      {payload.map((item) => {
+        const key = String(item.dataKey ?? item.value)
         const entry = config[key]
         return (
           <div key={key} className="flex items-center gap-1.5">

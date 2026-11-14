@@ -40,7 +40,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LocalExpense } from '@/lib/plugin'
-import type { AccountType, Commitment, Goal, RecurringSummary } from '@/lib/plugin'
+import type { Account, AccountType, Category, Commitment, FinancialSettings, Goal, RecurringSummary } from '@/lib/plugin'
 import { formatMinor, parseMajorToMinor } from '@/lib/money'
 import { queryKeys } from '@/lib/query'
 
@@ -273,124 +273,281 @@ function Confetti() {
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
-export function OnboardingPage() {
-  const navigate = useNavigate()
-  const client = useQueryClient()
-  const scrollRef = useRef<HTMLDivElement>(null)
+type OnboardingInitial = {
+  initialApps: string[]
+  initialDrafts: AccountDraft[]
+  initialCategories: string[]
+  initialBuffer: string
+  initialIncomeDay: string
+  initialExpectedIncome: string
+}
 
+function draftsFromAccounts(accounts: Account[]): AccountDraft[] {
+  return accounts.map((account) => ({
+    key: account.id,
+    id: account.id,
+    name: account.name,
+    lastDigits: account.lastDigits ?? '',
+    balanceInput: (account.anchorBalanceMinor / 100).toString(),
+    type: account.type,
+  }))
+}
+
+function essentialCategoryIds(financial: FinancialSettings, categories: Category[]) {
+  if (financial.essentialCategories.length > 0) return financial.essentialCategories
+  return categories.slice(0, 6).map((category) => category.id)
+}
+
+export function OnboardingPage() {
+  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: () => LocalExpense.listAccounts() })
+  const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: () => LocalExpense.listCategories() })
+  const financialQuery = useQuery({ queryKey: ['financialSettings'], queryFn: () => LocalExpense.getFinancialSettings() })
+  const candidateAppsQuery = useQuery({ queryKey: queryKeys.candidateApps, queryFn: () => LocalExpense.getCandidateApps() })
+
+  if (!accountsQuery.data || !categoriesQuery.data || !financialQuery.data) {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-surface-canvas text-sm text-text-muted">
+        Loading your setup…
+      </div>
+    )
+  }
+
+  const defaultSms = candidateAppsQuery.data?.defaultSmsPackage
+  const financial = financialQuery.data
+
+  return (
+    <OnboardingFlow
+      initialApps={defaultSms ? [defaultSms] : []}
+      initialDrafts={draftsFromAccounts(accountsQuery.data.accounts)}
+      initialCategories={essentialCategoryIds(financial, categoriesQuery.data.categories)}
+      initialBuffer={financial.bufferMinor ? (financial.bufferMinor / 100).toString() : ''}
+      initialIncomeDay={financial.incomeDay ? String(financial.incomeDay) : ''}
+      initialExpectedIncome={financial.expectedIncomeMinor ? (financial.expectedIncomeMinor / 100).toString() : ''}
+    />
+  )
+}
+
+function OnboardingFlow(initial: OnboardingInitial) {
+  const form = useOnboardingFormState(initial)
+  const data = useOnboardingQueries(form)
+  const actions = useOnboardingMutations(form)
+  const nav = useOnboardingNavigation(form, data, actions)
+  return <OnboardingView form={form} data={data} actions={actions} nav={nav} />
+}
+
+function useOnboardingFormState(initial: OnboardingInitial) {
+  const scrollRef = useRef<HTMLDivElement>(null)
   const [stepIndex, setStepIndex] = useState(0)
   const [maxReached, setMaxReached] = useState(0)
   const [direction, setDirection] = useState<'fwd' | 'back'>('fwd')
-  const step: Step = STEPS[stepIndex].id
-
-  const [selectedApps, setSelectedApps] = useState<string[]>([])
-  const [drafts, setDrafts] = useState<AccountDraft[]>([])
-  const draftsInitialised = useRef(false)
-
-  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set())
-  const categoriesInitialised = useRef(false)
-
+  const [selectedApps, setSelectedApps] = useState<string[]>(() => initial.initialApps)
+  const [drafts, setDrafts] = useState<AccountDraft[]>(() => initial.initialDrafts)
+  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(() => new Set(initial.initialCategories))
   const [commitmentName, setCommitmentName] = useState('')
   const [commitmentAmount, setCommitmentAmount] = useState('')
   const [commitmentDue, setCommitmentDue] = useState('')
-
   const [goalName, setGoalName] = useState('')
   const [goalTarget, setGoalTarget] = useState('')
   const [goalSaved, setGoalSaved] = useState('')
-
-  const [bufferInput, setBufferInput] = useState('')
-  const [incomeDay, setIncomeDay] = useState('')
-  const [expectedIncome, setExpectedIncome] = useState('')
+  const [bufferInput, setBufferInput] = useState(() => initial.initialBuffer)
+  const [incomeDay, setIncomeDay] = useState(() => initial.initialIncomeDay)
+  const [expectedIncome, setExpectedIncome] = useState(() => initial.initialExpectedIncome)
   const [savingsRate, setSavingsRate] = useState(20)
-
   const [infoDraftKey, setInfoDraftKey] = useState<string | null>(null)
   const [detectedCount, setDetectedCount] = useState<number | null>(null)
   const [showConfetti, setShowConfetti] = useState(false)
   const [finishing, setFinishing] = useState(false)
 
-  /* ---------------------------- queries ---------------------------- */
+  const updateDraft = (key: string, patch: Partial<AccountDraft>) => {
+    setDrafts((current) => current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)))
+  }
+
+  const addQuickAccount = (name: string, type: AccountType) => {
+    setDrafts((current) =>
+      current.some((draft) => draft.name === name)
+        ? current
+        : [...current, { key: `quick-${name}`, name, lastDigits: '', balanceInput: '', type }],
+    )
+  }
+
+  return {
+    scrollRef,
+    stepIndex,
+    setStepIndex,
+    maxReached,
+    setMaxReached,
+    direction,
+    setDirection,
+    selectedApps,
+    setSelectedApps,
+    drafts,
+    setDrafts,
+    selectedCategories,
+    setSelectedCategories,
+    commitmentName,
+    setCommitmentName,
+    commitmentAmount,
+    setCommitmentAmount,
+    commitmentDue,
+    setCommitmentDue,
+    goalName,
+    setGoalName,
+    goalTarget,
+    setGoalTarget,
+    goalSaved,
+    setGoalSaved,
+    bufferInput,
+    setBufferInput,
+    incomeDay,
+    setIncomeDay,
+    expectedIncome,
+    setExpectedIncome,
+    savingsRate,
+    setSavingsRate,
+    infoDraftKey,
+    setInfoDraftKey,
+    detectedCount,
+    setDetectedCount,
+    showConfetti,
+    setShowConfetti,
+    finishing,
+    setFinishing,
+    updateDraft,
+    addQuickAccount,
+  }
+}
+
+function useOnboardingQueries(form: ReturnType<typeof useOnboardingFormState>) {
+  const { drafts, infoDraftKey } = form
 
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: () => LocalExpense.listAccounts() })
   const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: () => LocalExpense.listCategories() })
   const recurringQuery = useQuery({ queryKey: queryKeys.recurring, queryFn: () => LocalExpense.listRecurring() })
   const commitmentsQuery = useQuery({ queryKey: ['commitments'], queryFn: () => LocalExpense.listCommitments() })
   const goalsQuery = useQuery({ queryKey: ['goals'], queryFn: () => LocalExpense.listGoals() })
-  const financialQuery = useQuery({ queryKey: ['financialSettings'], queryFn: () => LocalExpense.getFinancialSettings() })
   const listenerQuery = useQuery({ queryKey: queryKeys.listener, queryFn: () => LocalExpense.getListenerStatus() })
   const batteryQuery = useQuery({
     queryKey: queryKeys.battery,
     queryFn: () => LocalExpense.isIgnoringBatteryOptimizations(),
   })
 
-  const refetchListener = listenerQuery.refetch
-  const refetchBattery = batteryQuery.refetch
 
-  /* ---------------------- seed local form state --------------------- */
+  const totalBalance = useMemo(
+    () => drafts.reduce((sum, draft) => sum + (parseMajorToMinor(draft.balanceInput) ?? 0), 0),
+    [drafts],
+  )
+  const namedDrafts = drafts.filter((draft) => draft.name.trim())
+  const commitments = useMemo(() => commitmentsQuery.data?.commitments ?? [], [commitmentsQuery.data])
+  const fixedTotal = useMemo(() => commitments.reduce((sum, commitment) => sum + commitment.amountMinor, 0), [commitments])
+  const goals = goalsQuery.data?.goals ?? []
+  const recurring = useMemo(() => recurringQuery.data?.recurring ?? [], [recurringQuery.data])
+  const recurringMonthly = useMemo(
+    () => recurring.reduce((sum, payment) => sum + payment.amountMinor * monthlyFactor(String(payment.cadence)), 0),
+    [recurring],
+  )
+  const confirmedRecurringMonthly = useMemo(
+    () =>
+      recurring
+        .filter((payment) => payment.confirmed)
+        .reduce((sum, payment) => sum + payment.amountMinor * monthlyFactor(String(payment.cadence)), 0),
+    [recurring],
+  )
+  const granted = listenerQuery.data?.accessGranted ?? false
+  const ignoring = batteryQuery.data?.ignoring ?? false
 
-  useEffect(() => {
-    if (draftsInitialised.current || !accountsQuery.data) return
-    draftsInitialised.current = true
-    if (accountsQuery.data.accounts.length > 0) {
-      setDrafts(
-        accountsQuery.data.accounts.map((account) => ({
-          key: account.id,
-          id: account.id,
-          name: account.name,
-          lastDigits: account.lastDigits ?? '',
-          balanceInput: (account.anchorBalanceMinor / 100).toString(),
-          type: account.type,
-        })),
-      )
-    }
-  }, [accountsQuery.data])
+  const calm = useMemo(() => {
+    const buffer = parseMajorToMinor(form.bufferInput) ?? 0
+    const income = parseMajorToMinor(form.expectedIncome) ?? 0
+    const saving = Math.round(income * (form.savingsRate / 100))
+    const days = daysUntilIncome(Number(form.incomeDay) || 0)
+    const spendable = totalBalance - buffer - fixedTotal - Math.round(confirmedRecurringMonthly) - saving
+    return { days, saving, spendable, perDay: Math.max(0, Math.round(spendable / days)) }
+  }, [form.bufferInput, form.expectedIncome, form.savingsRate, form.incomeDay, totalBalance, fixedTotal, confirmedRecurringMonthly])
 
-  useEffect(() => {
-    if (categoriesInitialised.current || !categoriesQuery.data || !financialQuery.data) return
-    categoriesInitialised.current = true
-    const essential = financialQuery.data.essentialCategories
-    if (essential.length > 0) {
-      setSelectedCategories(new Set(essential))
-    } else {
-      setSelectedCategories(new Set(categoriesQuery.data.categories.slice(0, 6).map((c) => c.id)))
-    }
-    setBufferInput((financialQuery.data.bufferMinor / 100).toString())
-    setIncomeDay(financialQuery.data.incomeDay ? String(financialQuery.data.incomeDay) : '')
-    setExpectedIncome(
-      financialQuery.data.expectedIncomeMinor ? (financialQuery.data.expectedIncomeMinor / 100).toString() : '',
-    )
-  }, [categoriesQuery.data, financialQuery.data])
+  const availableCategories = (categoriesQuery.data?.categories ?? []).filter((category) => category.kind === 'EXPENSE')
+  const infoDraft = drafts.find((draft) => draft.key === infoDraftKey)
 
-  /* Re-check permissions while on the access step: when the user returns
-     from system settings, the status flips without a manual tap. */
-  useEffect(() => {
-    if (step !== 'access') return
-    const check = () => {
-      void refetchListener()
-      void refetchBattery()
-    }
-    const id = window.setInterval(check, 1500)
-    document.addEventListener('visibilitychange', check)
-    return () => {
-      window.clearInterval(id)
-      document.removeEventListener('visibilitychange', check)
-    }
-  }, [step, refetchListener, refetchBattery])
+  return {
+    accountsQuery,
+    categoriesQuery,
+    recurringQuery,
+    commitmentsQuery,
+    goalsQuery,
+    listenerQuery,
+    batteryQuery,
+    totalBalance,
+    namedDrafts,
+    commitments,
+    fixedTotal,
+    goals,
+    recurring,
+    recurringMonthly,
+    confirmedRecurringMonthly,
+    granted,
+    ignoring,
+    calm,
+    availableCategories,
+    infoDraft,
+    selectedCategoryCount: form.selectedCategories.size,
+  }
+}
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 })
-  }, [stepIndex])
+function proposalType(proposal: { type?: string | null }): AccountType {
+  return proposal.type === 'CARD' || proposal.type === 'CASH' || proposal.type === 'WALLET' || proposal.type === 'OTHER'
+    ? proposal.type
+    : 'BANK'
+}
 
-  useEffect(() => {
-    if (step !== 'ready') return
-    setShowConfetti(true)
-    const id = window.setTimeout(() => setShowConfetti(false), 4200)
-    return () => window.clearTimeout(id)
-  }, [step])
+function mergeDetectedDrafts(
+  current: AccountDraft[],
+  proposals: { name: string; lastDigits: string; balanceMinor?: number | null; packageName?: string; type?: string | null; sourceTexts?: string[] }[],
+) {
+  const additions = proposals
+    .filter((proposal) => !current.some((draft) => draft.lastDigits === proposal.lastDigits && draft.name === proposal.name))
+    .map((proposal) => ({
+      key: `proposal-${proposal.packageName}-${proposal.lastDigits}`,
+      name: proposal.name,
+      lastDigits: proposal.lastDigits,
+      balanceInput: proposal.balanceMinor != null ? (proposal.balanceMinor / 100).toString() : '',
+      type: proposalType(proposal),
+      sourceTexts: proposal.sourceTexts,
+      detected: true,
+    }))
+  return [...current, ...additions]
+}
 
-  /* --------------------------- mutations ---------------------------- */
+function useOnboardingMutations(form: ReturnType<typeof useOnboardingFormState>) {
+  const client = useQueryClient()
+  const {
+    drafts,
+    setDrafts,
+    selectedApps,
+    setSelectedApps,
+    setDetectedCount,
+    selectedCategories,
+    commitmentName,
+    commitmentAmount,
+    commitmentDue,
+    setCommitmentName,
+    setCommitmentAmount,
+    setCommitmentDue,
+    goalName,
+    goalTarget,
+    goalSaved,
+    setGoalName,
+    setGoalTarget,
+    setGoalSaved,
+    bufferInput,
+    incomeDay,
+    expectedIncome,
+  } = form
 
   const saveApps = useMutation({
     mutationFn: (packages: string[]) => LocalExpense.setMonitoredApps({ packages }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.monitoredApps })
+      void client.invalidateQueries({ queryKey: queryKeys.candidateApps })
+    },
   })
 
   const detect = useMutation({
@@ -403,32 +560,10 @@ export function OnboardingPage() {
       return LocalExpense.detectAccounts()
     },
     onSuccess: ({ proposals }) => {
-      let added = 0
-      setDrafts((current) => {
-        const merged = [...current]
-        for (const proposal of proposals) {
-          const exists = merged.some(
-            (d) => d.lastDigits && d.lastDigits === proposal.lastDigits && d.name === proposal.name,
-          )
-          if (exists) continue
-          added += 1
-          const type: AccountType =
-            proposal.type === 'CARD' || proposal.type === 'CASH' || proposal.type === 'WALLET' || proposal.type === 'OTHER'
-              ? proposal.type
-              : 'BANK'
-          merged.push({
-            key: `proposal-${proposal.packageName}-${proposal.lastDigits}`,
-            name: proposal.name,
-            lastDigits: proposal.lastDigits,
-            balanceInput: proposal.balanceMinor != null ? (proposal.balanceMinor / 100).toString() : '',
-            type,
-            sourceTexts: proposal.sourceTexts,
-            detected: true,
-          })
-        }
-        return merged
-      })
+      setDrafts((current) => mergeDetectedDrafts(current, proposals))
       setDetectedCount(proposals.length)
+      void client.invalidateQueries({ queryKey: ['rawEvents'] })
+      void client.invalidateQueries({ queryKey: queryKeys.smsImport })
       if (proposals.length === 0) toast.info('No accounts found in your recent alerts')
     },
     onError: () => toast.error('Could not scan alerts. You can add accounts by hand.'),
@@ -436,22 +571,32 @@ export function OnboardingPage() {
 
   const saveBalances = useMutation({
     mutationFn: async () => {
-      const valid = drafts.filter((d) => d.name.trim())
-      for (const draft of valid) {
-        await LocalExpense.setAccountBalance({
-          id: draft.id,
-          name: draft.name.trim(),
-          lastDigits: draft.lastDigits.trim() || null,
-          type: draft.type,
-          balanceMinor: parseMajorToMinor(draft.balanceInput) ?? 0,
-        })
-      }
+      const valid = drafts.filter((draft) => draft.name.trim())
+      await Promise.all(
+        valid.map((draft) =>
+          LocalExpense.setAccountBalance({
+            id: draft.id,
+            name: draft.name.trim(),
+            lastDigits: draft.lastDigits.trim() || null,
+            type: draft.type,
+            balanceMinor: parseMajorToMinor(draft.balanceInput) ?? 0,
+          }),
+        ),
+      )
     },
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.accounts }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.accounts })
+      void client.invalidateQueries({ queryKey: queryKeys.balances })
+      void client.invalidateQueries({ queryKey: queryKeys.dashboard })
+    },
   })
 
   const saveCategories = useMutation({
     mutationFn: () => LocalExpense.setFinancialSettings({ essentialCategories: Array.from(selectedCategories) }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['financialSettings'] })
+      void client.invalidateQueries({ queryKey: queryKeys.dashboard })
+    },
   })
 
   const setStatus = useMutation({
@@ -516,129 +661,170 @@ export function OnboardingPage() {
     onSuccess: () => void client.invalidateQueries({ queryKey: ['financialSettings'] }),
   })
 
-  /* --------------------------- derived data ------------------------- */
+  return {
+    saveApps,
+    detect,
+    saveBalances,
+    saveCategories,
+    setStatus,
+    addCommitment,
+    removeCommitment,
+    addGoal,
+    removeGoal,
+    saveFinancial,
+    selectedApps,
+    setSelectedApps,
+  }
+}
 
-  const totalBalance = useMemo(
-    () => drafts.reduce((sum, d) => sum + (parseMajorToMinor(d.balanceInput) ?? 0), 0),
-    [drafts],
-  )
-  const namedDrafts = drafts.filter((d) => d.name.trim())
-  const commitments = useMemo(() => commitmentsQuery.data?.commitments ?? [], [commitmentsQuery.data])
-  const fixedTotal = useMemo(() => commitments.reduce((sum, c) => sum + c.amountMinor, 0), [commitments])
-  const goals = goalsQuery.data?.goals ?? []
-  const recurring = useMemo(() => recurringQuery.data?.recurring ?? [], [recurringQuery.data])
+function labelFor(step: Step, granted: boolean, hasNamedDrafts: boolean, fixedTotal: number) {
+  switch (step) {
+    case 'privacy':
+      return 'Start setup'
+    case 'access':
+      return granted ? 'Continue' : 'Continue without access'
+    case 'accounts':
+      return hasNamedDrafts ? 'Save and continue' : 'Skip for now'
+    case 'categories':
+      return 'Save and continue'
+    case 'recurring':
+      return 'Continue'
+    case 'fixed':
+      return fixedTotal > 0 ? 'Continue' : 'Skip for now'
+    case 'goals':
+      return 'Save and review'
+    case 'ready':
+      return 'Open my dashboard'
+  }
+}
 
-  const recurringMonthly = useMemo(
-    () => recurring.reduce((sum, p) => sum + p.amountMinor * monthlyFactor(String(p.cadence)), 0),
-    [recurring],
-  )
-  const confirmedRecurringMonthly = useMemo(
-    () =>
-      recurring
-        .filter((p) => p.confirmed)
-        .reduce((sum, p) => sum + p.amountMinor * monthlyFactor(String(p.cadence)), 0),
-    [recurring],
-  )
+async function runPrimaryStep(
+  step: Step,
+  handlers: {
+    hasApps: boolean
+    hasNamedDrafts: boolean
+    saveApps: () => Promise<unknown>
+    saveBalances: () => Promise<unknown>
+    saveCategories: () => Promise<unknown>
+    saveFinancial: () => Promise<unknown>
+    finish: () => Promise<void>
+    next: () => void
+  },
+) {
+  try {
+    switch (step) {
+      case 'accounts':
+        if (handlers.hasApps) await handlers.saveApps()
+        await handlers.saveBalances()
+        if (handlers.hasNamedDrafts) toast.success('Accounts saved')
+        break
+      case 'categories':
+        await handlers.saveCategories()
+        break
+      case 'goals':
+        await handlers.saveFinancial()
+        break
+      case 'ready':
+        await handlers.finish()
+        return
+    }
+    handlers.next()
+  } catch {
+    toast.error('Could not save. Check your entries and try again.')
+  }
+}
 
-  const granted = listenerQuery.data?.accessGranted ?? false
-  const ignoring = batteryQuery.data?.ignoring ?? false
+function useOnboardingNavigation(
+  form: ReturnType<typeof useOnboardingFormState>,
+  data: ReturnType<typeof useOnboardingQueries>,
+  actions: ReturnType<typeof useOnboardingMutations>,
+) {
+  const navigate = useNavigate()
+  const client = useQueryClient()
+  const step: Step = STEPS[form.stepIndex].id
 
-  /* The "calm daily number": what is left after the buffer, fixed costs,
-     confirmed recurring payments and savings, spread to the next payday. */
-  const calm = useMemo(() => {
-    const buffer = parseMajorToMinor(bufferInput) ?? 0
-    const income = parseMajorToMinor(expectedIncome) ?? 0
-    const saving = Math.round(income * (savingsRate / 100))
-    const days = daysUntilIncome(Number(incomeDay) || 0)
-    const spendable = totalBalance - buffer - fixedTotal - Math.round(confirmedRecurringMonthly) - saving
-    return { days, saving, spendable, perDay: Math.max(0, Math.round(spendable / days)) }
-  }, [bufferInput, expectedIncome, savingsRate, incomeDay, totalBalance, fixedTotal, confirmedRecurringMonthly])
+  useEffect(() => {
+    form.scrollRef.current?.scrollTo({ top: 0 })
+  }, [form.stepIndex, form.scrollRef])
 
-  const animatedPerDay = useCountUp(step === 'ready' ? calm.perDay : 0)
-  const animatedTotal = useCountUp(step === 'ready' ? totalBalance : 0)
-
-  /* ---------------------------- navigation -------------------------- */
+  useEffect(() => {
+    if (step !== 'ready') return
+    form.setShowConfetti(true)
+    const id = window.setTimeout(() => form.setShowConfetti(false), 4200)
+    return () => window.clearTimeout(id)
+  }, [step, form.setShowConfetti])
 
   const goTo = useCallback(
     (index: number) => {
       if (index < 0 || index >= STEPS.length) return
-      setDirection(index >= stepIndex ? 'fwd' : 'back')
-      setStepIndex(index)
-      setMaxReached((m) => Math.max(m, index))
+      form.setDirection(index >= form.stepIndex ? 'fwd' : 'back')
+      form.setStepIndex(index)
+      form.setMaxReached((current) => Math.max(current, index))
     },
-    [stepIndex],
+    [form.stepIndex, form.setDirection, form.setMaxReached, form.setStepIndex],
   )
-  const next = () => goTo(stepIndex + 1)
-  const back = () => goTo(stepIndex - 1)
+  const next = () => goTo(form.stepIndex + 1)
+  const back = () => goTo(form.stepIndex - 1)
 
-  function updateDraft(key: string, patch: Partial<AccountDraft>) {
-    setDrafts((current) => current.map((d) => (d.key === key ? { ...d, ...patch } : d)))
-  }
-
-  function addQuickAccount(name: string, type: AccountType) {
-    setDrafts((current) =>
-      current.some((d) => d.name === name)
-        ? current
-        : [...current, { key: `quick-${name}`, name, lastDigits: '', balanceInput: '', type }],
-    )
-  }
-
-  async function finish() {
-    setFinishing(true)
+  const finish = async () => {
+    form.setFinishing(true)
     try {
       await LocalExpense.setOnboardingComplete({ completed: true })
       await client.invalidateQueries({ queryKey: queryKeys.onboarding })
       navigate('/dashboard', { replace: true })
     } catch {
       toast.error('Could not finish setup. Try again.')
-      setFinishing(false)
+      form.setFinishing(false)
     }
   }
 
-  async function onPrimary() {
-    try {
-      switch (step) {
-        case 'accounts':
-          if (selectedApps.length > 0) await saveApps.mutateAsync(selectedApps)
-          await saveBalances.mutateAsync()
-          if (namedDrafts.length > 0) toast.success('Accounts saved')
-          break
-        case 'categories':
-          await saveCategories.mutateAsync()
-          break
-        case 'goals':
-          await saveFinancial.mutateAsync()
-          break
-        case 'ready':
-          await finish()
-          return
-      }
-      next()
-    } catch {
-      toast.error('Could not save. Check your entries and try again.')
-    }
-  }
+  const onPrimary = () =>
+    runPrimaryStep(step, {
+      hasApps: data.selectedCategoryCount >= 0 && form.selectedApps.length > 0,
+      hasNamedDrafts: data.namedDrafts.length > 0,
+      saveApps: () => actions.saveApps.mutateAsync(form.selectedApps),
+      saveBalances: () => actions.saveBalances.mutateAsync(),
+      saveCategories: () => actions.saveCategories.mutateAsync(),
+      saveFinancial: () => actions.saveFinancial.mutateAsync(),
+      finish,
+      next,
+    })
 
   const busy =
-    saveApps.isPending || saveBalances.isPending || saveCategories.isPending || saveFinancial.isPending || finishing
+    actions.saveApps.isPending ||
+    actions.saveBalances.isPending ||
+    actions.saveCategories.isPending ||
+    actions.saveFinancial.isPending ||
+    form.finishing
 
-  const primaryLabel: Record<Step, string> = {
-    privacy: 'Start setup',
-    access: granted ? 'Continue' : 'Continue without access',
-    accounts: namedDrafts.length === 0 ? 'Skip for now' : 'Save and continue',
-    categories: 'Save and continue',
-    recurring: 'Continue',
-    fixed: fixedTotal > 0 ? 'Continue' : 'Skip for now',
-    goals: 'Save and review',
-    ready: 'Open my dashboard',
+  return {
+    step,
+    goTo,
+    next,
+    back,
+    onPrimary,
+    busy,
+    primaryLabel: labelFor(step, data.granted, data.namedDrafts.length > 0, data.fixedTotal),
+    finish,
+    animatedPerDay: useCountUp(step === 'ready' ? data.calm.perDay : 0),
+    animatedTotal: useCountUp(step === 'ready' ? data.totalBalance : 0),
   }
+}
 
-  const availableCategories = (categoriesQuery.data?.categories ?? []).filter((c) => c.kind === 'EXPENSE')
-  const infoDraft = drafts.find((d) => d.key === infoDraftKey)
-
-  /* ------------------------------------------------------------------ */
-  /* Render                                                              */
-  /* ------------------------------------------------------------------ */
+function OnboardingView({
+  form,
+  data,
+  actions,
+  nav,
+}: {
+  form: ReturnType<typeof useOnboardingFormState>
+  data: ReturnType<typeof useOnboardingQueries>
+  actions: ReturnType<typeof useOnboardingMutations>
+  nav: ReturnType<typeof useOnboardingNavigation>
+}) {
+  const { stepIndex, maxReached, showConfetti, infoDraftKey, setInfoDraftKey } = form
+  const { infoDraft } = data
+  const { step, goTo, back, onPrimary, busy, primaryLabel } = nav
 
   return (
     <div className="relative flex h-dvh flex-col bg-surface-canvas text-text-primary">
@@ -668,6 +854,84 @@ export function OnboardingPage() {
 
       {showConfetti && <Confetti />}
 
+      <OnboardingHeader stepIndex={stepIndex} maxReached={maxReached} goTo={goTo} />
+
+      <OnboardingSteps form={form} data={data} actions={actions} nav={nav} />
+
+      {/* ------------------------------ footer ------------------------------ */}
+      <footer className="shrink-0 border-t border-border-subtle bg-surface-canvas/90 px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-md items-center gap-3">
+          {stepIndex > 0 && (
+            <button
+              type="button"
+              onClick={back}
+              disabled={busy}
+              aria-label="Back"
+              className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-card text-text-secondary transition-colors hover:bg-surface-raised hover:text-text-primary"
+            >
+              <ArrowLeft size={19} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void onPrimary()}
+            disabled={busy}
+            className={`flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-calm-indigo to-indigo-600 font-headline text-[15px] font-semibold text-white shadow-lg shadow-indigo-600/25 transition-all hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.98] disabled:opacity-70 ${
+              step === 'ready' ? 'h-14 text-[16px]' : ''
+            }`}
+          >
+            {busy ? (
+              <>
+                <RefreshCw size={17} className="animate-spin" />
+                <span>{step === 'ready' ? 'Opening…' : 'Saving…'}</span>
+              </>
+            ) : (
+              <>
+                {step === 'ready' && <Sparkles size={18} />}
+                <span>{primaryLabel}</span>
+                {step !== 'ready' && <ArrowRight size={18} />}
+              </>
+            )}
+          </button>
+        </div>
+      </footer>
+
+      {/* -------------------------- detection details ------------------------- */}
+      <Dialog open={infoDraftKey !== null} onOpenChange={(open) => !open && setInfoDraftKey(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Why we found this account</DialogTitle>
+            <DialogDescription>These alerts mention it. They are read on your phone only.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 space-y-2 overflow-y-auto">
+            {(infoDraft?.sourceTexts ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No alerts to show.</p>
+            ) : (
+              infoDraft?.sourceTexts?.map((text, index) => (
+                <div key={text} className={`flex ${index % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
+                  <div className="max-w-[85%] rounded-2xl border border-border-subtle bg-surface-raised px-3 py-2 text-xs text-text-primary">
+                    {text}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+function OnboardingHeader({
+  stepIndex,
+  maxReached,
+  goTo,
+}: {
+  stepIndex: number
+  maxReached: number
+  goTo: (index: number) => void
+}) {
+  return (
+    <>
       {/* ------------------------------ header ------------------------------ */}
       <header className="shrink-0 px-5 pt-[calc(1rem+env(safe-area-inset-top))] pb-3">
         <div className="mx-auto flex w-full max-w-md items-center justify-between">
@@ -722,15 +986,210 @@ export function OnboardingPage() {
           </p>
         </nav>
       </header>
+    </>
+  )
+}
 
+function OnboardingSteps({
+  form,
+  data,
+  actions,
+  nav,
+}: {
+  form: ReturnType<typeof useOnboardingFormState>
+  data: ReturnType<typeof useOnboardingQueries>
+  actions: ReturnType<typeof useOnboardingMutations>
+  nav: ReturnType<typeof useOnboardingNavigation>
+}) {
+  const {
+    scrollRef,
+    direction,
+    selectedApps,
+    setSelectedApps,
+    drafts,
+    setDrafts,
+    selectedCategories,
+    setSelectedCategories,
+    commitmentName,
+    setCommitmentName,
+    commitmentAmount,
+    setCommitmentAmount,
+    commitmentDue,
+    setCommitmentDue,
+    goalName,
+    setGoalName,
+    goalTarget,
+    setGoalTarget,
+    goalSaved,
+    setGoalSaved,
+    bufferInput,
+    setBufferInput,
+    incomeDay,
+    setIncomeDay,
+    expectedIncome,
+    setExpectedIncome,
+    savingsRate,
+    setSavingsRate,
+    setInfoDraftKey,
+    detectedCount,
+    updateDraft,
+    addQuickAccount,
+  } = form
+  const {
+    accountsQuery,
+    listenerQuery,
+    totalBalance,
+    namedDrafts,
+    commitments,
+    fixedTotal,
+    goals,
+    recurring,
+    recurringMonthly,
+    confirmedRecurringMonthly,
+    granted,
+    ignoring,
+    calm,
+    availableCategories,
+  } = data
+  const { detect, setStatus, addCommitment, removeCommitment, addGoal, removeGoal } = actions
+  const { step, goTo, animatedPerDay, animatedTotal } = nav
+  const refetchListener = listenerQuery.refetch
+
+  return (
+    <>
       {/* ------------------------------ content ------------------------------ */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 pt-2 pb-8">
         <div
           key={step}
           className={`mx-auto flex w-full min-w-0 max-w-md flex-col gap-5 ${direction === 'fwd' ? 'fx-step-fwd' : 'fx-step-back'}`}
         >
-          {/* ============================ PRIVACY ============================ */}
-          {step === 'privacy' && (
+          {step === 'privacy' && <PrivacyStep />}
+
+          {step === 'access' && (
+            <AccessStep granted={granted} ignoring={ignoring} listenerFetching={listenerQuery.isFetching} onRefetch={() => void refetchListener()} />
+          )}
+
+          {step === 'accounts' && (
+            <AccountsStep
+              drafts={drafts}
+              totalBalance={totalBalance}
+              selectedApps={selectedApps}
+              detectedCount={detectedCount}
+              detectPending={detect.isPending}
+              onAppsChange={setSelectedApps}
+              onDetect={() => detect.mutate()}
+              onUpdateDraft={updateDraft}
+              onAddQuickAccount={addQuickAccount}
+              onRemoveDraft={(key) => setDrafts((current) => current.filter((draft) => draft.key !== key))}
+              onAddDraft={() =>
+                setDrafts((current) => [
+                  ...current,
+                  { key: `manual-${Date.now()}`, name: '', lastDigits: '', balanceInput: '', type: 'BANK' },
+                ])
+              }
+              onInfoDraft={setInfoDraftKey}
+            />
+          )}
+
+          {step === 'categories' && (
+            <CategoriesStep
+              categories={availableCategories}
+              selected={selectedCategories}
+              onSelectAll={() => setSelectedCategories(new Set(availableCategories.map((category) => category.id)))}
+              onClear={() => setSelectedCategories(new Set())}
+              onToggle={(id) =>
+                setSelectedCategories((current) => {
+                  const nextSet = new Set(current)
+                  if (nextSet.has(id)) nextSet.delete(id)
+                  else nextSet.add(id)
+                  return nextSet
+                })
+              }
+            />
+          )}
+
+          {step === 'recurring' && (
+            <RecurringStep
+              recurring={recurring}
+              recurringMonthly={recurringMonthly}
+              confirmedRecurringMonthly={confirmedRecurringMonthly}
+              statusPending={setStatus.isPending}
+              onToggle={(id, confirmed) => setStatus.mutate({ merchantId: id, status: confirmed ? 'SUGGESTED' : 'CONFIRMED' })}
+            />
+          )}
+
+          {step === 'fixed' && (
+            <FixedStep
+              commitments={commitments}
+              fixedTotal={fixedTotal}
+              commitmentName={commitmentName}
+              commitmentAmount={commitmentAmount}
+              commitmentDue={commitmentDue}
+              addPending={addCommitment.isPending}
+              onName={setCommitmentName}
+              onAmount={setCommitmentAmount}
+              onDue={setCommitmentDue}
+              onAdd={() => addCommitment.mutate()}
+              onRemove={(id) => removeCommitment.mutate(id)}
+            />
+          )}
+
+          {step === 'goals' && (
+            <GoalsStep
+              goals={goals}
+              goalName={goalName}
+              goalTarget={goalTarget}
+              goalSaved={goalSaved}
+              bufferInput={bufferInput}
+              incomeDay={incomeDay}
+              expectedIncome={expectedIncome}
+              savingsRate={savingsRate}
+              addPending={addGoal.isPending}
+              onName={setGoalName}
+              onTarget={setGoalTarget}
+              onSaved={setGoalSaved}
+              onBuffer={setBufferInput}
+              onIncomeDay={setIncomeDay}
+              onExpectedIncome={setExpectedIncome}
+              onSavingsRate={setSavingsRate}
+              onAdd={() => addGoal.mutate()}
+              onRemove={(id) => removeGoal.mutate(id)}
+            />
+          )}
+
+          {step === 'ready' && (
+            <ReadyStep
+              calm={calm}
+              animatedPerDay={animatedPerDay}
+              animatedTotal={animatedTotal}
+              namedDraftsCount={namedDrafts.length}
+              existingAccountCount={accountsQuery.data?.accounts.length ?? 0}
+              fixedTotal={fixedTotal}
+              commitmentCount={commitments.length}
+              selectedCategoryCount={selectedCategories.size}
+              goalCount={goals.length}
+              granted={granted}
+              ignoring={ignoring}
+              onEdit={goTo}
+              onFixAccess={() => goTo(1)}
+              onRequestBattery={() => LocalExpense.requestIgnoreBatteryOptimizations()}
+            />
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Step views                                                          */
+/* ------------------------------------------------------------------ */
+
+function PrivacyStep() {
+  return (
+    <>
+
             <>
               <div className="relative flex h-60 items-center justify-center overflow-hidden rounded-3xl border border-border-subtle bg-surface-card">
                 <div className="pointer-events-none absolute -left-10 -top-10 size-44 rounded-full bg-calm-indigo/20 blur-3xl" />
@@ -792,10 +1251,24 @@ export function OnboardingPage() {
                 ))}
               </div>
             </>
-          )}
+    </>
+  )
+}
 
-          {/* ============================= ACCESS ============================= */}
-          {step === 'access' && (
+function AccessStep({
+  granted,
+  ignoring,
+  listenerFetching,
+  onRefetch,
+}: {
+  granted: boolean
+  ignoring: boolean
+  listenerFetching: boolean
+  onRefetch: () => void
+}) {
+  return (
+    <>
+
             <>
               <StepHeading
                 icon={BellRing}
@@ -832,10 +1305,10 @@ export function OnboardingPage() {
                         variant="outline"
                         className="h-11 w-11 px-0"
                         aria-label="Check again"
-                        onClick={() => void refetchListener()}
-                        disabled={listenerQuery.isFetching}
+                        onClick={() => void onRefetch()}
+                        disabled={listenerFetching}
                       >
-                        <RefreshCw className={`size-4 ${listenerQuery.isFetching ? 'animate-spin' : ''}`} />
+                        <RefreshCw className={`size-4 ${listenerFetching ? 'animate-spin' : ''}`} />
                       </Button>
                     </div>
                   </>
@@ -887,10 +1360,40 @@ export function OnboardingPage() {
                 )}
               </Panel>
             </>
-          )}
+    </>
+  )
+}
 
-          {/* ============================ ACCOUNTS ============================ */}
-          {step === 'accounts' && (
+function AccountsStep({
+  drafts,
+  totalBalance,
+  selectedApps,
+  detectedCount,
+  detectPending,
+  onAppsChange,
+  onDetect,
+  onUpdateDraft,
+  onAddQuickAccount,
+  onRemoveDraft,
+  onAddDraft,
+  onInfoDraft,
+}: {
+  drafts: AccountDraft[]
+  totalBalance: number
+  selectedApps: string[]
+  detectedCount: number | null
+  detectPending: boolean
+  onAppsChange: (apps: string[]) => void
+  onDetect: () => void
+  onUpdateDraft: (key: string, patch: Partial<AccountDraft>) => void
+  onAddQuickAccount: (name: string, type: AccountType) => void
+  onRemoveDraft: (key: string) => void
+  onAddDraft: () => void
+  onInfoDraft: (key: string) => void
+}) {
+  return (
+    <>
+
             <>
               <StepHeading
                 icon={Landmark}
@@ -911,11 +1414,11 @@ export function OnboardingPage() {
                 <Button
                   className="relative h-11 w-full"
                   variant="secondary"
-                  onClick={() => detect.mutate()}
-                  disabled={detect.isPending}
+                  onClick={() => onDetect()}
+                  disabled={detectPending}
                 >
-                  <Sparkles className={`size-4 ${detect.isPending ? 'animate-pulse' : ''}`} />
-                  {detect.isPending ? 'Scanning alerts…' : detectedCount === null ? 'Scan my alerts' : 'Scan again'}
+                  <Sparkles className={`size-4 ${detectPending ? 'animate-pulse' : ''}`} />
+                  {detectPending ? 'Scanning alerts…' : detectedCount === null ? 'Scan my alerts' : 'Scan again'}
                 </Button>
                 {detectedCount !== null && detectedCount > 0 && (
                   <p className="relative flex items-center gap-1.5 text-[12px] text-calm-emerald">
@@ -935,7 +1438,7 @@ export function OnboardingPage() {
                         key={q.name}
                         type="button"
                         disabled={added}
-                        onClick={() => addQuickAccount(q.name, q.type)}
+                        onClick={() => onAddQuickAccount(q.name, q.type)}
                         className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition-colors ${
                           added
                             ? 'border-calm-indigo/30 bg-calm-indigo/10 text-calm-indigo-light'
@@ -980,7 +1483,7 @@ export function OnboardingPage() {
                               type="button"
                               aria-label="Why was this detected?"
                               className="rounded-full p-1.5 text-text-muted hover:bg-surface-raised hover:text-text-primary"
-                              onClick={() => setInfoDraftKey(draft.key)}
+                              onClick={() => onInfoDraft(draft.key)}
                             >
                               <Info size={16} />
                             </button>
@@ -989,7 +1492,7 @@ export function OnboardingPage() {
                             type="button"
                             aria-label="Remove account"
                             className="rounded-full p-1.5 text-text-muted hover:bg-surface-raised hover:text-gentle-rose"
-                            onClick={() => setDrafts((c) => c.filter((d) => d.key !== draft.key))}
+                            onClick={() => onRemoveDraft(draft.key)}
                           >
                             <Trash2 size={16} />
                           </button>
@@ -1007,7 +1510,7 @@ export function OnboardingPage() {
                             type="button"
                             role="radio"
                             aria-checked={draft.type === type}
-                            onClick={() => updateDraft(draft.key, { type })}
+                            onClick={() => onUpdateDraft(draft.key, { type })}
                             className={`flex h-9 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] transition-all ${
                               draft.type === type
                                 ? 'bg-calm-indigo text-white shadow-sm'
@@ -1024,7 +1527,7 @@ export function OnboardingPage() {
                         label="Account name"
                         value={draft.name}
                         placeholder="HDFC Savings"
-                        onChange={(e) => updateDraft(draft.key, { name: e.target.value })}
+                        onChange={(e) => onUpdateDraft(draft.key, { name: e.target.value })}
                       />
                       <div className="flex gap-3">
                         <Field
@@ -1035,7 +1538,7 @@ export function OnboardingPage() {
                           value={draft.lastDigits}
                           placeholder="4821"
                           onChange={(e) =>
-                            updateDraft(draft.key, { lastDigits: e.target.value.replace(/\D/g, '').slice(0, 4) })
+                            onUpdateDraft(draft.key, { lastDigits: e.target.value.replace(/\D/g, '').slice(0, 4) })
                           }
                         />
                         <Field
@@ -1045,7 +1548,7 @@ export function OnboardingPage() {
                           inputMode="decimal"
                           value={draft.balanceInput}
                           placeholder="0.00"
-                          onChange={(e) => updateDraft(draft.key, { balanceInput: e.target.value })}
+                          onChange={(e) => onUpdateDraft(draft.key, { balanceInput: e.target.value })}
                         />
                       </div>
                     </div>
@@ -1063,12 +1566,7 @@ export function OnboardingPage() {
               <Button
                 variant="outline"
                 className="h-11 w-full"
-                onClick={() =>
-                  setDrafts((c) => [
-                    ...c,
-                    { key: `manual-${Date.now()}`, name: '', lastDigits: '', balanceInput: '', type: 'BANK' },
-                  ])
-                }
+                onClick={onAddDraft}
               >
                 <Plus className="size-4" />
                 Add another account
@@ -1080,7 +1578,7 @@ export function OnboardingPage() {
                   <p className="text-[13px] text-text-muted">Finxeity only reads alerts from these apps.</p>
                 </div>
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-2xl [&_*]:min-w-0 [&_*]:break-words">
-                  <AppPicker selected={selectedApps} onChange={setSelectedApps} preselectDefaultSms />
+                  <AppPicker selected={selectedApps} onChange={onAppsChange} />
                 </div>
                 <p className={`text-[12px] ${selectedApps.length === 0 ? 'text-amber-400' : 'text-text-muted'}`}>
                   {selectedApps.length === 0
@@ -1089,10 +1587,26 @@ export function OnboardingPage() {
                 </p>
               </div>
             </>
-          )}
+    </>
+  )
+}
 
-          {/* =========================== CATEGORIES =========================== */}
-          {step === 'categories' && (
+function CategoriesStep({
+  categories,
+  selected,
+  onSelectAll,
+  onClear,
+  onToggle,
+}: {
+  categories: Category[]
+  selected: Set<string>
+  onSelectAll: () => void
+  onClear: () => void
+  onToggle: (id: string) => void
+}) {
+  return (
+    <>
+
             <>
               <StepHeading
                 icon={Layers}
@@ -1100,7 +1614,7 @@ export function OnboardingPage() {
                 subtitle="Pick the areas you can’t skip. Everything else is treated as flexible spending."
                 aside={
                   <span className="shrink-0 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-0.5 text-[12px] text-calm-indigo-light tabular-nums">
-                    {selectedCategories.size} chosen
+                    {selected.size} chosen
                   </span>
                 }
               />
@@ -1109,35 +1623,28 @@ export function OnboardingPage() {
                 <button
                   type="button"
                   className="text-calm-indigo-light hover:underline"
-                  onClick={() => setSelectedCategories(new Set(availableCategories.map((c) => c.id)))}
+                  onClick={() => onSelectAll()}
                 >
                   Select all
                 </button>
                 <button
                   type="button"
                   className="text-text-muted hover:underline"
-                  onClick={() => setSelectedCategories(new Set())}
+                  onClick={() => onClear()}
                 >
                   Clear
                 </button>
               </div>
 
               <div className="grid grid-cols-2 gap-2.5">
-                {availableCategories.map((category) => {
-                  const active = selectedCategories.has(category.id)
+                {categories.map((category) => {
+                  const active = selected.has(category.id)
                   return (
                     <button
                       key={category.id}
                       type="button"
                       aria-pressed={active}
-                      onClick={() =>
-                        setSelectedCategories((current) => {
-                          const nextSet = new Set(current)
-                          if (nextSet.has(category.id)) nextSet.delete(category.id)
-                          else nextSet.add(category.id)
-                          return nextSet
-                        })
-                      }
+                      onClick={() => onToggle(category.id)}
                       className={`relative flex items-center gap-2.5 rounded-2xl border p-3 text-left transition-all active:scale-[0.97] ${
                         active
                           ? 'border-indigo-500/40 bg-gradient-to-br from-indigo-600/15 to-surface-card shadow-sm shadow-indigo-500/10'
@@ -1156,10 +1663,26 @@ export function OnboardingPage() {
                 })}
               </div>
             </>
-          )}
+    </>
+  )
+}
 
-          {/* ============================ RECURRING =========================== */}
-          {step === 'recurring' && (
+function RecurringStep({
+  recurring,
+  recurringMonthly,
+  confirmedRecurringMonthly,
+  statusPending,
+  onToggle,
+}: {
+  recurring: RecurringSummary[]
+  recurringMonthly: number
+  confirmedRecurringMonthly: number
+  statusPending: boolean
+  onToggle: (id: string, confirmed: boolean) => void
+}) {
+  return (
+    <>
+
             <>
               <StepHeading
                 icon={Repeat}
@@ -1201,10 +1724,8 @@ export function OnboardingPage() {
                         <button
                           type="button"
                           aria-pressed={payment.confirmed}
-                          disabled={setStatus.isPending}
-                          onClick={() =>
-                            setStatus.mutate({ merchantId: id, status: payment.confirmed ? 'SUGGESTED' : 'CONFIRMED' })
-                          }
+                          disabled={statusPending}
+                          onClick={() => onToggle(id, payment.confirmed)}
                           className={`flex h-9 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-all active:scale-95 ${
                             payment.confirmed
                               ? 'border-calm-indigo/40 bg-calm-indigo text-white'
@@ -1235,10 +1756,38 @@ export function OnboardingPage() {
                 </div>
               )}
             </>
-          )}
+    </>
+  )
+}
 
-          {/* ============================== FIXED ============================= */}
-          {step === 'fixed' && (
+function FixedStep({
+  commitments,
+  fixedTotal,
+  commitmentName,
+  commitmentAmount,
+  commitmentDue,
+  addPending,
+  onName,
+  onAmount,
+  onDue,
+  onAdd,
+  onRemove,
+}: {
+  commitments: Commitment[]
+  fixedTotal: number
+  commitmentName: string
+  commitmentAmount: string
+  commitmentDue: string
+  addPending: boolean
+  onName: (value: string) => void
+  onAmount: (value: string) => void
+  onDue: (value: string) => void
+  onAdd: () => void
+  onRemove: (id: string) => void
+}) {
+  return (
+    <>
+
             <>
               <StepHeading
                 icon={Wallet}
@@ -1267,7 +1816,7 @@ export function OnboardingPage() {
                         type="button"
                         aria-label={`Remove ${commitment.name}`}
                         className="rounded-full p-2 text-text-muted hover:bg-surface-raised hover:text-gentle-rose"
-                        onClick={() => removeCommitment.mutate(commitment.id)}
+                        onClick={() => onRemove(commitment.id)}
                       >
                         <X size={15} />
                       </button>
@@ -1282,7 +1831,7 @@ export function OnboardingPage() {
                   label="What is it?"
                   placeholder="Apartment rent"
                   value={commitmentName}
-                  onChange={(e) => setCommitmentName(e.target.value)}
+                  onChange={(e) => onName(e.target.value)}
                 />
                 <div className="grid grid-cols-2 gap-3">
                   <Field
@@ -1291,26 +1840,26 @@ export function OnboardingPage() {
                     inputMode="decimal"
                     placeholder="28000"
                     value={commitmentAmount}
-                    onChange={(e) => setCommitmentAmount(e.target.value)}
+                    onChange={(e) => onAmount(e.target.value)}
                   />
                   <Field
                     label="Next due date"
                     type="date"
                     value={commitmentDue}
-                    onChange={(e) => setCommitmentDue(e.target.value)}
+                    onChange={(e) => onDue(e.target.value)}
                   />
                 </div>
                 <Button
                   className="h-11 w-full"
                   disabled={
-                    addCommitment.isPending ||
+                    addPending ||
                     !commitmentName.trim() ||
                     !((parseMajorToMinor(commitmentAmount) ?? 0) > 0)
                   }
-                  onClick={() => addCommitment.mutate()}
+                  onClick={onAdd}
                 >
                   <Plus className="size-4" />
-                  {addCommitment.isPending ? 'Adding…' : 'Add fixed cost'}
+                  {addPending ? 'Adding…' : 'Add fixed cost'}
                 </Button>
               </Panel>
 
@@ -1321,10 +1870,52 @@ export function OnboardingPage() {
                 </span>
               </div>
             </>
-          )}
+    </>
+  )
+}
 
-          {/* ============================== GOALS ============================= */}
-          {step === 'goals' && (
+function GoalsStep({
+  goals,
+  goalName,
+  goalTarget,
+  goalSaved,
+  bufferInput,
+  incomeDay,
+  expectedIncome,
+  savingsRate,
+  addPending,
+  onName,
+  onTarget,
+  onSaved,
+  onBuffer,
+  onIncomeDay,
+  onExpectedIncome,
+  onSavingsRate,
+  onAdd,
+  onRemove,
+}: {
+  goals: Goal[]
+  goalName: string
+  goalTarget: string
+  goalSaved: string
+  bufferInput: string
+  incomeDay: string
+  expectedIncome: string
+  savingsRate: number
+  addPending: boolean
+  onName: (value: string) => void
+  onTarget: (value: string) => void
+  onSaved: (value: string) => void
+  onBuffer: (value: string) => void
+  onIncomeDay: (value: string) => void
+  onExpectedIncome: (value: string) => void
+  onSavingsRate: (value: number) => void
+  onAdd: () => void
+  onRemove: (id: string) => void
+}) {
+  return (
+    <>
+
             <>
               <StepHeading
                 icon={Target}
@@ -1357,7 +1948,7 @@ export function OnboardingPage() {
                           type="button"
                           aria-label={`Remove ${goal.name}`}
                           className="rounded-full p-2 text-text-muted hover:bg-surface-raised hover:text-gentle-rose"
-                          onClick={() => removeGoal.mutate(goal.id)}
+                          onClick={() => onRemove(goal.id)}
                         >
                           <X size={15} />
                         </button>
@@ -1373,7 +1964,7 @@ export function OnboardingPage() {
                   label="Goal name"
                   placeholder="Emergency fund"
                   value={goalName}
-                  onChange={(e) => setGoalName(e.target.value)}
+                  onChange={(e) => onName(e.target.value)}
                 />
                 <div className="grid grid-cols-2 gap-3">
                   <Field
@@ -1382,7 +1973,7 @@ export function OnboardingPage() {
                     inputMode="decimal"
                     placeholder="150000"
                     value={goalTarget}
-                    onChange={(e) => setGoalTarget(e.target.value)}
+                    onChange={(e) => onTarget(e.target.value)}
                   />
                   <Field
                     label="Saved so far"
@@ -1390,17 +1981,17 @@ export function OnboardingPage() {
                     inputMode="decimal"
                     placeholder="40000"
                     value={goalSaved}
-                    onChange={(e) => setGoalSaved(e.target.value)}
+                    onChange={(e) => onSaved(e.target.value)}
                   />
                 </div>
                 <Button
                   className="h-11 w-full"
                   variant="secondary"
-                  disabled={addGoal.isPending || !goalName.trim() || !((parseMajorToMinor(goalTarget) ?? 0) > 0)}
-                  onClick={() => addGoal.mutate()}
+                  disabled={addPending || !goalName.trim() || !((parseMajorToMinor(goalTarget) ?? 0) > 0)}
+                  onClick={onAdd}
                 >
                   <Plus className="size-4" />
-                  {addGoal.isPending ? 'Adding…' : 'Add goal'}
+                  {addPending ? 'Adding…' : 'Add goal'}
                 </Button>
               </Panel>
 
@@ -1412,7 +2003,7 @@ export function OnboardingPage() {
                   inputMode="decimal"
                   placeholder="25000"
                   value={bufferInput}
-                  onChange={(e) => setBufferInput(e.target.value)}
+                  onChange={(e) => onBuffer(e.target.value)}
                 />
                 <div className="grid grid-cols-2 gap-3">
                   <Field
@@ -1423,7 +2014,7 @@ export function OnboardingPage() {
                     inputMode="numeric"
                     placeholder="1"
                     value={incomeDay}
-                    onChange={(e) => setIncomeDay(e.target.value)}
+                    onChange={(e) => onIncomeDay(e.target.value)}
                   />
                   <Field
                     label="Monthly income"
@@ -1431,7 +2022,7 @@ export function OnboardingPage() {
                     inputMode="decimal"
                     placeholder="85000"
                     value={expectedIncome}
-                    onChange={(e) => setExpectedIncome(e.target.value)}
+                    onChange={(e) => onExpectedIncome(e.target.value)}
                   />
                 </div>
 
@@ -1451,7 +2042,7 @@ export function OnboardingPage() {
                     step={5}
                     value={savingsRate}
                     aria-label="Savings rate"
-                    onChange={(e) => setSavingsRate(Number(e.target.value))}
+                    onChange={(e) => onSavingsRate(Number(e.target.value))}
                     className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-surface-raised accent-calm-indigo"
                   />
                   <p className="text-[12px] text-text-muted">
@@ -1460,10 +2051,44 @@ export function OnboardingPage() {
                 </div>
               </Panel>
             </>
-          )}
+    </>
+  )
+}
 
-          {/* ============================== READY ============================= */}
-          {step === 'ready' && (
+function ReadyStep({
+  calm,
+  animatedPerDay,
+  animatedTotal,
+  namedDraftsCount,
+  existingAccountCount,
+  fixedTotal,
+  commitmentCount,
+  selectedCategoryCount,
+  goalCount,
+  granted,
+  ignoring,
+  onEdit,
+  onFixAccess,
+  onRequestBattery,
+}: {
+  calm: { days: number; saving: number; spendable: number; perDay: number }
+  animatedPerDay: number
+  animatedTotal: number
+  namedDraftsCount: number
+  existingAccountCount: number
+  fixedTotal: number
+  commitmentCount: number
+  selectedCategoryCount: number
+  goalCount: number
+  granted: boolean
+  ignoring: boolean
+  onEdit: (index: number) => void
+  onFixAccess: () => void
+  onRequestBattery: () => void
+}) {
+  return (
+    <>
+
             <>
               <div className="relative overflow-hidden rounded-3xl border border-indigo-500/25 bg-gradient-to-b from-indigo-600/20 via-surface-card to-surface-card p-6 text-center">
                 <div className="pointer-events-none absolute left-1/2 top-0 size-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-calm-indigo/30 blur-3xl" />
@@ -1487,15 +2112,15 @@ export function OnboardingPage() {
 
               <div className="grid grid-cols-2 gap-2.5">
                 {[
-                  { label: 'Starting balance', value: formatMinor(animatedTotal), sub: `${namedDrafts.length || accountsQuery.data?.accounts.length || 0} accounts`, go: 2 },
-                  { label: 'Fixed per month', value: formatMinor(fixedTotal), sub: `${commitments.length} cost${commitments.length === 1 ? '' : 's'}`, go: 5 },
-                  { label: 'Essential buckets', value: String(selectedCategories.size), sub: 'chosen', go: 3 },
-                  { label: 'Goals', value: String(goals.length), sub: calm.saving > 0 ? `saving ${formatMinor(calm.saving)}/mo` : 'none yet', go: 6 },
+                  { label: 'Starting balance', value: formatMinor(animatedTotal), sub: `${namedDraftsCount || existingAccountCount} accounts`, go: 2 },
+                  { label: 'Fixed per month', value: formatMinor(fixedTotal), sub: `${commitmentCount} cost${commitmentCount === 1 ? '' : 's'}`, go: 5 },
+                  { label: 'Essential buckets', value: String(selectedCategoryCount), sub: 'chosen', go: 3 },
+                  { label: 'Goals', value: String(goalCount), sub: calm.saving > 0 ? `saving ${formatMinor(calm.saving)}/mo` : 'none yet', go: 6 },
                 ].map((tile) => (
                   <button
                     key={tile.label}
                     type="button"
-                    onClick={() => goTo(tile.go)}
+                    onClick={() => onEdit(tile.go)}
                     className="rounded-2xl border border-border-subtle bg-surface-card p-3.5 text-left transition-colors hover:border-indigo-500/40"
                   >
                     <p className="text-[12px] text-text-muted">{tile.label}</p>
@@ -1517,7 +2142,7 @@ export function OnboardingPage() {
                   <AlertTitle>Notification access is still off</AlertTitle>
                   <AlertDescription>
                     Finxeity can’t track new spending until you turn it on.{' '}
-                    <button type="button" className="underline" onClick={() => goTo(1)}>
+                    <button type="button" className="underline" onClick={() => onFixAccess()}>
                       Fix it now
                     </button>
                   </AlertDescription>
@@ -1527,77 +2152,13 @@ export function OnboardingPage() {
                 <Button
                   className="h-11 w-full"
                   variant="outline"
-                  onClick={() => LocalExpense.requestIgnoreBatteryOptimizations()}
+                  onClick={() => onRequestBattery()}
                 >
                   <BatteryCharging className="size-4" />
                   Exempt from battery optimization
                 </Button>
               )}
             </>
-          )}
-        </div>
-      </div>
-
-      {/* ------------------------------ footer ------------------------------ */}
-      <footer className="shrink-0 border-t border-border-subtle bg-surface-canvas/90 px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur-xl">
-        <div className="mx-auto flex w-full max-w-md items-center gap-3">
-          {stepIndex > 0 && (
-            <button
-              type="button"
-              onClick={back}
-              disabled={busy}
-              aria-label="Back"
-              className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-card text-text-secondary transition-colors hover:bg-surface-raised hover:text-text-primary"
-            >
-              <ArrowLeft size={19} />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => void onPrimary()}
-            disabled={busy}
-            className={`flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-calm-indigo to-indigo-600 font-headline text-[15px] font-semibold text-white shadow-lg shadow-indigo-600/25 transition-all hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.98] disabled:opacity-70 ${
-              step === 'ready' ? 'h-14 text-[16px]' : ''
-            }`}
-          >
-            {busy ? (
-              <>
-                <RefreshCw size={17} className="animate-spin" />
-                <span>{step === 'ready' ? 'Opening…' : 'Saving…'}</span>
-              </>
-            ) : (
-              <>
-                {step === 'ready' && <Sparkles size={18} />}
-                <span>{primaryLabel[step]}</span>
-                {step !== 'ready' && <ArrowRight size={18} />}
-              </>
-            )}
-          </button>
-        </div>
-      </footer>
-
-      {/* -------------------------- detection details ------------------------- */}
-      <Dialog open={infoDraftKey !== null} onOpenChange={(open) => !open && setInfoDraftKey(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Why we found this account</DialogTitle>
-            <DialogDescription>These alerts mention it. They are read on your phone only.</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-80 space-y-2 overflow-y-auto">
-            {(infoDraft?.sourceTexts ?? []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No alerts to show.</p>
-            ) : (
-              infoDraft?.sourceTexts?.map((text, index) => (
-                <div key={index} className={`flex ${index % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
-                  <div className="max-w-[85%] rounded-2xl border border-border-subtle bg-surface-raised px-3 py-2 text-xs text-text-primary">
-                    {text}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
+    </>
   )
 }

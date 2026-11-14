@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -23,7 +23,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { LocalExpense } from '@/lib/plugin'
-import type { AccountBalance, AccountProposal, AccountType } from '@/lib/plugin'
+import type { AccountBalance, AccountProposal, AccountType, FinancialSettings } from '@/lib/plugin'
 import { formatMinor, parseMajorToMinor } from '@/lib/money'
 import { queryKeys } from '@/lib/query'
 import { cn } from '@/lib/utils'
@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { MoneyField } from '@/components/money-field'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /* ────────────────────────────── helpers ────────────────────────────── */
@@ -136,30 +137,6 @@ function ActionRow({
   )
 }
 
-function MoneyField({
-  label,
-  value,
-  onChange,
-  placeholder = '0.00',
-  hint,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  placeholder?: string
-  hint?: string
-}) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      <div className="relative">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">{currencySymbol}</span>
-        <Input className="h-11 pl-8 tabular-nums" inputMode="decimal" value={value} placeholder={placeholder} onChange={(e) => onChange(cleanAmount(e.target.value))} />
-      </div>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  )
-}
 
 /* ───────────────────────────── page ───────────────────────────── */
 
@@ -223,76 +200,24 @@ export function SettingsPage() {
             ruleCount={ruleList.length}
           />
 
-          <Group title="Tracking">
-            <ActionRow
-              onClick={() => void LocalExpense.openNotificationSettings()}
-              icon={<IconTile><BellRing className="size-5" /></IconTile>}
-              title="Notification access"
-              subtitle={listener.data?.accessGranted ? 'Allowed. Opens system settings.' : 'Off. Tap to turn it on.'}
-            />
-            <NavRow
-              to="/settings/apps"
-              icon={<IconTile tone="bg-sky-500/15 text-sky-300"><Smartphone className="size-5" /></IconTile>}
-              title="Monitored apps"
-              subtitle={`${plural(appCount, 'app')} watched for bank alerts`}
-            />
-            {sms.data?.supported && (
-              <ActionRow
-                onClick={() => importSms.mutate()}
-                disabled={importSms.isPending}
-                icon={<IconTile tone="bg-emerald-500/15 text-emerald-300"><MessageSquarePlus className="size-5" /></IconTile>}
-                title={importSms.isPending ? 'Importing…' : 'Import SMS history'}
-                subtitle="Recover the last 90 days from bank texts (sideload builds only)"
-                right={importSms.isPending ? <RefreshCw className="size-4 animate-spin text-muted-foreground" /> : undefined}
-              />
-            )}
-            <ActionRow
-              onClick={() => reparse.mutate()}
-              disabled={reparse.isPending}
-              icon={<IconTile tone="bg-amber-500/15 text-amber-300"><RefreshCw className={cn('size-5', reparse.isPending && 'animate-spin')} /></IconTile>}
-              title={reparse.isPending ? 'Reading…' : 'Read all messages again'}
-              subtitle="Useful after the app learns a new bank format"
-              right={<span />}
-            />
-          </Group>
+          <TrackingGroup
+            loading={listener.isLoading}
+            accessGranted={!!listener.data?.accessGranted}
+            smsSupported={!!sms.data?.supported}
+            appCount={appCount}
+            importPending={importSms.isPending}
+            reparsePending={reparse.isPending}
+            onImportSms={() => importSms.mutate()}
+            onReparse={() => reparse.mutate()}
+          />
 
-          <Group title="Accounts" footer="Each balance is the number you set, plus everything spent or received since.">
-            {balances.isLoading && (
-              <div className="space-y-3 p-4">
-                <Skeleton className="h-10 w-full rounded-2xl" />
-                <Skeleton className="h-10 w-full rounded-2xl" />
-              </div>
-            )}
-            {!balances.isLoading && accounts.length === 0 && (
-              <p className="px-4 py-5 text-sm text-muted-foreground">No accounts yet. Add one, or let the app find them in your messages.</p>
-            )}
-            {accounts.map((a) => {
-              const k = kindMeta(a.type)
-              const drifted = a.derivedBalanceMinor !== a.anchorBalanceMinor
-              return (
-                <ActionRow
-                  key={a.id}
-                  onClick={() => setAccountDrawer({ account: a })}
-                  icon={<IconTile tone="bg-muted">{k.emoji}</IconTile>}
-                  title={`${a.name}${a.lastDigits ? `  ••${a.lastDigits}` : ''}`}
-                  subtitle={drifted ? `Started at ${formatMinor(a.anchorBalanceMinor)}` : k.label}
-                  right={<span className="text-sm font-semibold tabular-nums">{formatMinor(a.derivedBalanceMinor)}</span>}
-                />
-              )
-            })}
-            <ActionRow
-              onClick={() => setAccountDrawer({ account: null })}
-              icon={<IconTile tone="bg-indigo-500/15 text-indigo-300"><Plus className="size-5" /></IconTile>}
-              title="Add an account"
-              right={<span />}
-            />
-            <ActionRow
-              onClick={() => setDetecting(true)}
-              icon={<IconTile tone="bg-violet-500/15 text-violet-300"><Sparkles className="size-5" /></IconTile>}
-              title="Find accounts in my messages"
-              subtitle="Looks through stored bank alerts for accounts you use"
-            />
-          </Group>
+          <AccountsGroup
+            loading={balances.isLoading}
+            accounts={accounts}
+            onEdit={(account) => setAccountDrawer({ account })}
+            onAdd={() => setAccountDrawer({ account: null })}
+            onDetect={() => setDetecting(true)}
+          />
 
           <Group title="Planning">
             <NavRow to="/bills" icon={<IconTile tone="bg-orange-500/15 text-orange-300"><Receipt className="size-5" /></IconTile>} title="Upcoming bills" />
@@ -306,28 +231,148 @@ export function SettingsPage() {
 
           {devUnlocked && <DeveloperGroup />}
 
-          <button
-            type="button"
-            onClick={() => {
-              if (devUnlocked) return
+          <PrivacyFooter
+            unlocked={devUnlocked}
+            onSecretTap={() => {
               const next = devTaps + 1
               setDevTaps(next)
               if (next === 5) toast.success('Developer tools unlocked')
             }}
-            className="mx-auto flex flex-col items-center gap-1.5 pt-2 text-center"
-          >
-            <ShieldCheck className="size-5 text-emerald-400" />
-            <span className="text-sm font-medium">Private by design</span>
-            <span className="max-w-xs text-xs text-muted-foreground">
-              Release builds have no internet permission. Everything stays on this device.
-            </span>
-          </button>
+          />
         </div>
       </div>
 
       <AccountDrawer state={accountDrawer} onClose={() => setAccountDrawer(null)} />
-      <DetectDrawer open={detecting} onClose={() => setDetecting(false)} />
+      {detecting && <DetectDrawer onClose={() => setDetecting(false)} />}
     </div>
+  )
+}
+
+function TrackingGroup({
+  loading,
+  accessGranted,
+  smsSupported,
+  appCount,
+  importPending,
+  reparsePending,
+  onImportSms,
+  onReparse,
+}: {
+  loading: boolean
+  accessGranted: boolean
+  smsSupported: boolean
+  appCount: number
+  importPending: boolean
+  reparsePending: boolean
+  onImportSms: () => void
+  onReparse: () => void
+}) {
+  return (
+    <Group title="Tracking">
+      <ActionRow
+        onClick={() => void LocalExpense.openNotificationSettings()}
+        icon={<IconTile><BellRing className="size-5" /></IconTile>}
+        title="Notification access"
+        subtitle={accessGranted ? 'Allowed. Opens system settings.' : 'Off. Tap to turn it on.'}
+      />
+      <NavRow
+        to="/settings/apps"
+        icon={<IconTile tone="bg-sky-500/15 text-sky-300"><Smartphone className="size-5" /></IconTile>}
+        title="Monitored apps"
+        subtitle={`${plural(appCount, 'app')} watched for bank alerts`}
+      />
+      {smsSupported && (
+        <ActionRow
+          onClick={onImportSms}
+          disabled={importPending}
+          icon={<IconTile tone="bg-emerald-500/15 text-emerald-300"><MessageSquarePlus className="size-5" /></IconTile>}
+          title={importPending ? 'Importing…' : 'Import SMS history'}
+          subtitle="Recover the last 90 days from bank texts (sideload builds only)"
+          right={importPending ? <RefreshCw className="size-4 animate-spin text-muted-foreground" /> : undefined}
+        />
+      )}
+      <ActionRow
+        onClick={onReparse}
+        disabled={reparsePending}
+        icon={<IconTile tone="bg-amber-500/15 text-amber-300"><RefreshCw className={cn('size-5', reparsePending && 'animate-spin')} /></IconTile>}
+        title={reparsePending ? 'Reading…' : 'Read all messages again'}
+        subtitle="Useful after the app learns a new bank format"
+        right={<span />}
+      />
+      {loading && <Skeleton className="m-4 h-8 rounded-xl" />}
+    </Group>
+  )
+}
+
+function AccountsGroup({
+  loading,
+  accounts,
+  onEdit,
+  onAdd,
+  onDetect,
+}: {
+  loading: boolean
+  accounts: AccountBalance[]
+  onEdit: (account: AccountBalance) => void
+  onAdd: () => void
+  onDetect: () => void
+}) {
+  return (
+    <Group title="Accounts" footer="Each balance is the number you set, plus everything spent or received since.">
+      {loading && (
+        <div className="space-y-3 p-4">
+          <Skeleton className="h-10 w-full rounded-2xl" />
+          <Skeleton className="h-10 w-full rounded-2xl" />
+        </div>
+      )}
+      {!loading && accounts.length === 0 && (
+        <p className="px-4 py-5 text-sm text-muted-foreground">No accounts yet. Add one, or let the app find them in your messages.</p>
+      )}
+      {accounts.map((account) => {
+        const kind = kindMeta(account.type)
+        const drifted = account.derivedBalanceMinor !== account.anchorBalanceMinor
+        return (
+          <ActionRow
+            key={account.id}
+            onClick={() => onEdit(account)}
+            icon={<IconTile tone="bg-muted">{kind.emoji}</IconTile>}
+            title={`${account.name}${account.lastDigits ? `  ••${account.lastDigits}` : ''}`}
+            subtitle={drifted ? `Started at ${formatMinor(account.anchorBalanceMinor)}` : kind.label}
+            right={<span className="text-sm font-semibold tabular-nums">{formatMinor(account.derivedBalanceMinor)}</span>}
+          />
+        )
+      })}
+      <ActionRow
+        onClick={onAdd}
+        icon={<IconTile tone="bg-indigo-500/15 text-indigo-300"><Plus className="size-5" /></IconTile>}
+        title="Add an account"
+        right={<span />}
+      />
+      <ActionRow
+        onClick={onDetect}
+        icon={<IconTile tone="bg-violet-500/15 text-violet-300"><Sparkles className="size-5" /></IconTile>}
+        title="Find accounts in my messages"
+        subtitle="Looks through stored bank alerts for accounts you use"
+      />
+    </Group>
+  )
+}
+
+function PrivacyFooter({ unlocked, onSecretTap }: { unlocked: boolean; onSecretTap: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!unlocked) onSecretTap()
+      }}
+      className="mx-auto flex flex-col items-center gap-1.5 pt-2 text-center"
+    >
+      <ShieldCheck className="size-5 text-emerald-400" />
+      <span className="text-sm font-medium">Private by design</span>
+      <span className="max-w-xs text-xs text-muted-foreground">
+        Release builds have no internet permission. Everything stays on this device.
+      </span>
+    </button>
   )
 }
 
@@ -398,38 +443,9 @@ function Stat({ value, label }: { value: number; label: string }) {
 /* ───────────────────────────── financial settings ───────────────────────────── */
 
 function FinancialCard() {
-  const client = useQueryClient()
   const financial = useQuery({ queryKey: ['financialSettings'], queryFn: () => LocalExpense.getFinancialSettings() })
-  const [buffer, setBuffer] = useState('')
-  const [incomeDay, setIncomeDay] = useState('')
-  const [income, setIncome] = useState('')
-
-  // Fill the form once the saved values arrive (the old uncontrolled inputs stayed blank if data loaded late).
-  useEffect(() => {
-    const d = financial.data
-    if (!d) return
-    setBuffer(d.bufferMinor ? (d.bufferMinor / 100).toString() : '')
-    setIncomeDay(d.incomeDay ? String(d.incomeDay) : '')
-    setIncome(d.expectedIncomeMinor ? (d.expectedIncomeMinor / 100).toString() : '')
-  }, [financial.data])
-
-  const save = useMutation({
-    mutationFn: (payload: { bufferMinor?: number; incomeDay?: number; expectedIncomeMinor?: number; essentialCategories?: string[] }) =>
-      LocalExpense.setFinancialSettings(payload),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['financialSettings'] })
-      void client.invalidateQueries({ queryKey: queryKeys.dashboard })
-      toast.success('Saved')
-    },
-    onError: () => toast.error('Could not save. Try again.'),
-  })
-
   const d = financial.data
-  const bufferMinor = parseMajorToMinor(buffer || '0') ?? 0
-  const incomeMinor = parseMajorToMinor(income || '0') ?? 0
-  const day = incomeDay === '' ? 0 : Number(incomeDay)
-  const dayValid = Number.isInteger(day) && day >= 0 && day <= 31
-  const dirty = !!d && (bufferMinor !== d.bufferMinor || incomeMinor !== d.expectedIncomeMinor || day !== (d.incomeDay ?? 0))
+  const key = d ? `${d.bufferMinor}:${d.incomeDay ?? 0}:${d.expectedIncomeMinor}` : 'loading'
 
   return (
     <section className="space-y-2">
@@ -444,33 +460,97 @@ function FinancialCard() {
             <Skeleton className="h-11 w-full" />
             <Skeleton className="h-11 w-full" />
           </div>
-        ) : (
-          <>
-            <MoneyField label="Emergency buffer" value={buffer} onChange={setBuffer} hint="Money you never want to count as spendable." />
-            <MoneyField label="Expected monthly income" value={income} onChange={setIncome} />
-            <div className="space-y-1.5">
-              <Label>Income arrives on day</Label>
-              <Input
-                className="h-11 tabular-nums"
-                inputMode="numeric"
-                value={incomeDay}
-                placeholder="1 to 31"
-                onChange={(e) => setIncomeDay(e.target.value.replace(/\D/g, '').slice(0, 2))}
-                aria-invalid={!dayValid}
-              />
-              {!dayValid && <p className="text-xs text-rose-400">Enter a day between 1 and 31.</p>}
-            </div>
-            <Button
-              className="h-11 w-full"
-              disabled={!dirty || !dayValid || save.isPending}
-              onClick={() => save.mutate({ bufferMinor, expectedIncomeMinor: incomeMinor, incomeDay: day })}
-            >
-              {save.isPending ? 'Saving…' : dirty ? 'Save changes' : 'Up to date'}
-            </Button>
-          </>
-        )}
+        ) : d ? (
+          <FinancialForm key={key} data={d} />
+        ) : null}
       </div>
     </section>
+  )
+}
+
+function toAmountInput(minor: number) {
+  return minor ? (minor / 100).toString() : ''
+}
+
+function toDayInput(day: number) {
+  return day ? String(day) : ''
+}
+
+function financialDirty(data: FinancialSettings, bufferMinor: number, incomeMinor: number, day: number) {
+  return bufferMinor !== data.bufferMinor || incomeMinor !== data.expectedIncomeMinor || day !== data.incomeDay
+}
+
+function FinancialForm({ data }: { data: FinancialSettings }) {
+  const client = useQueryClient()
+  const [buffer, setBuffer] = useState(() => toAmountInput(data.bufferMinor))
+  const [incomeDay, setIncomeDay] = useState(() => toDayInput(data.incomeDay))
+  const [income, setIncome] = useState(() => toAmountInput(data.expectedIncomeMinor))
+
+  const save = useMutation({
+    mutationFn: (payload: { bufferMinor?: number; incomeDay?: number; expectedIncomeMinor?: number; essentialCategories?: string[] }) =>
+      LocalExpense.setFinancialSettings(payload),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['financialSettings'] })
+      void client.invalidateQueries({ queryKey: queryKeys.dashboard })
+      toast.success('Saved')
+    },
+    onError: () => toast.error('Could not save. Try again.'),
+  })
+
+  const bufferMinor = parseMajorToMinor(buffer || '0') ?? 0
+  const incomeMinor = parseMajorToMinor(income || '0') ?? 0
+  const day = incomeDay === '' ? 0 : Number(incomeDay)
+  const dayValid = Number.isInteger(day) && day >= 0 && day <= 31
+  const dirty = financialDirty(data, bufferMinor, incomeMinor, day)
+
+  return (
+    <>
+      <MoneyField label="Emergency buffer" value={buffer} onChange={setBuffer} placeholder="0.00" hint="Money you never want to count as spendable." />
+      <MoneyField label="Expected monthly income" value={income} onChange={setIncome} placeholder="0.00" />
+      <IncomeDayField value={incomeDay} valid={dayValid} onChange={setIncomeDay} />
+      <FinanceSaveButton
+        dirty={dirty}
+        valid={dayValid}
+        pending={save.isPending}
+        onSave={() => save.mutate({ bufferMinor, expectedIncomeMinor: incomeMinor, incomeDay: day })}
+      />
+    </>
+  )
+}
+
+function IncomeDayField({ value, valid, onChange }: { value: string; valid: boolean; onChange: (value: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>Income arrives on day</Label>
+      <Input
+        className="h-11 tabular-nums"
+        inputMode="numeric"
+        value={value}
+        placeholder="1 to 31"
+        onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 2))}
+        aria-invalid={!valid}
+      />
+      {!valid && <p className="text-xs text-rose-400">Enter a day between 1 and 31.</p>}
+    </div>
+  )
+}
+
+function FinanceSaveButton({
+  dirty,
+  valid,
+  pending,
+  onSave,
+}: {
+  dirty: boolean
+  valid: boolean
+  pending: boolean
+  onSave: () => void
+}) {
+  const label = pending ? 'Saving…' : dirty ? 'Save changes' : 'Up to date'
+  return (
+    <Button className="h-11 w-full" disabled={!dirty || !valid || pending} onClick={onSave}>
+      {label}
+    </Button>
   )
 }
 
@@ -534,29 +614,30 @@ function RulesGroup({ rules, loading }: { rules: { id: string; packageName?: str
 /* ───────────────────────────── account drawer ───────────────────────────── */
 
 function AccountDrawer({ state, onClose }: { state: { account: AccountBalance | null } | null; onClose: () => void }) {
-  const client = useQueryClient()
-  const account = state?.account ?? null
-  const [name, setName] = useState('')
-  const [lastDigits, setLastDigits] = useState('')
-  const [balance, setBalance] = useState('')
-  const [type, setType] = useState<AccountType>('BANK')
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  if (!state) {
+    return (
+      <Drawer open={false} onOpenChange={() => {}}>
+        <DrawerContent />
+      </Drawer>
+    )
+  }
 
-  useEffect(() => {
-    if (!state) return
-    setConfirmDelete(false)
-    if (account) {
-      setName(account.name)
-      setLastDigits(account.lastDigits ?? '')
-      setBalance((account.anchorBalanceMinor / 100).toFixed(2))
-      setType(account.type)
-    } else {
-      setName('')
-      setLastDigits('')
-      setBalance('')
-      setType('BANK')
-    }
-  }, [state]) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
+      <DrawerContent className="max-h-[92dvh]">
+        <AccountDrawerBody key={state.account?.id ?? 'new'} account={state.account} onClose={onClose} />
+      </DrawerContent>
+    </Drawer>
+  )
+}
+
+function AccountDrawerBody({ account, onClose }: { account: AccountBalance | null; onClose: () => void }) {
+  const client = useQueryClient()
+  const [name, setName] = useState(() => account?.name ?? '')
+  const [lastDigits, setLastDigits] = useState(() => account?.lastDigits ?? '')
+  const [balance, setBalance] = useState(() => (account ? (account.anchorBalanceMinor / 100).toFixed(2) : ''))
+  const [type, setType] = useState<AccountType>(() => account?.type ?? 'BANK')
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const refresh = () => {
     void client.invalidateQueries({ queryKey: queryKeys.accounts })
@@ -590,130 +671,163 @@ function AccountDrawer({ state, onClose }: { state: { account: AccountBalance | 
     onError: () => toast.error('Could not remove the account. Try again.'),
   })
 
+  const title = account ? 'Edit account' : 'Add an account'
+  const description = account
+    ? 'Set the balance to re-anchor the tracked total.'
+    : 'Enter what the account shows right now. Activity after that keeps it current.'
+  const submitLabel = save.isPending ? 'Saving…' : account ? 'Save changes' : 'Add account'
+  const deleteLabel = confirmDelete ? 'Tap again to remove this account' : 'Remove account'
+
   return (
-    <Drawer open={state !== null} onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="pb-2">
-          <DrawerTitle>{account ? 'Edit account' : 'Add an account'}</DrawerTitle>
-          <DrawerDescription>
-            {account ? 'Set the balance to re-anchor the tracked total.' : 'Enter what the account shows right now. Activity after that keeps it current.'}
-          </DrawerDescription>
-        </DrawerHeader>
+    <>
+      <DrawerHeader className="pb-2">
+        <DrawerTitle>{title}</DrawerTitle>
+        <DrawerDescription>{description}</DrawerDescription>
+      </DrawerHeader>
 
-        <div className="space-y-5 overflow-y-auto px-4 pb-2">
-          <div className="flex items-baseline justify-center gap-1.5 py-1">
-            <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
-            <input
-              inputMode="decimal"
-              value={balance}
-              onChange={(e) => setBalance(cleanAmount(e.target.value))}
-              placeholder="0"
-              aria-label="Balance"
-              className="w-52 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label>Kind</Label>
-            <div className="flex flex-wrap gap-2">
-              {ACCOUNT_KINDS.map((k) => (
-                <button
-                  key={k.value}
-                  type="button"
-                  onClick={() => setType(k.value)}
-                  className={cn(
-                    'inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-sm transition-all active:scale-95',
-                    type === k.value ? 'border-indigo-400/70 bg-indigo-500/20 font-medium' : 'border-border bg-card text-muted-foreground',
-                  )}
-                >
-                  <span>{k.emoji}</span>
-                  {k.label}
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">{kindMeta(type).hint}</p>
-          </div>
-
-          <div className="grid grid-cols-[1fr_6.5rem] gap-3">
-            <div className="space-y-1.5">
-              <Label>Name</Label>
-              <Input className="h-11" value={name} placeholder="HDFC Savings" onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Last 4</Label>
-              <Input
-                className="h-11 tabular-nums"
-                inputMode="numeric"
-                maxLength={4}
-                value={lastDigits}
-                placeholder="4821"
-                onChange={(e) => setLastDigits(e.target.value.replace(/\D/g, '').slice(0, 4))}
-              />
-            </div>
-          </div>
-
-          {account && (
-            <Button
-              variant="ghost"
-              className={cn('w-full', confirmDelete ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
-              disabled={remove.isPending}
-              onClick={() => (confirmDelete ? remove.mutate() : setConfirmDelete(true))}
-            >
-              {confirmDelete ? 'Tap again to remove this account' : 'Remove account'}
-            </Button>
-          )}
+      <div className="space-y-5 overflow-y-auto px-4 pb-2">
+        <div className="flex items-baseline justify-center gap-1.5 py-1">
+          <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
+          <input
+            inputMode="decimal"
+            value={balance}
+            onChange={(e) => setBalance(cleanAmount(e.target.value))}
+            placeholder="0"
+            aria-label="Balance"
+            className="w-52 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
+          />
         </div>
 
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <Button className="h-12 text-base" disabled={!name.trim() || save.isPending} onClick={() => save.mutate()}>
-            {save.isPending ? 'Saving…' : account ? 'Save changes' : 'Add account'}
+        <div className="space-y-2">
+          <Label>Kind</Label>
+          <div className="flex flex-wrap gap-2">
+            {ACCOUNT_KINDS.map((kind) => (
+              <button
+                key={kind.value}
+                type="button"
+                onClick={() => setType(kind.value)}
+                className={cn(
+                  'inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-sm transition-[color,background-color,border-color,transform] active:scale-95',
+                  type === kind.value ? 'border-indigo-400/70 bg-indigo-500/20 font-medium' : 'border-border bg-card text-muted-foreground',
+                )}
+              >
+                <span>{kind.emoji}</span>
+                {kind.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{kindMeta(type).hint}</p>
+        </div>
+
+        <div className="grid grid-cols-[1fr_6.5rem] gap-3">
+          <div className="space-y-1.5">
+            <Label>Name</Label>
+            <Input className="h-11" value={name} placeholder="HDFC Savings" onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Last 4</Label>
+            <Input
+              className="h-11 tabular-nums"
+              inputMode="numeric"
+              maxLength={4}
+              value={lastDigits}
+              placeholder="4821"
+              onChange={(e) => setLastDigits(e.target.value.replace(/\D/g, '').slice(0, 4))}
+            />
+          </div>
+        </div>
+
+        {account && (
+          <Button
+            variant="ghost"
+            className={cn('w-full', confirmDelete ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
+            disabled={remove.isPending}
+            onClick={() => (confirmDelete ? remove.mutate() : setConfirmDelete(true))}
+          >
+            {deleteLabel}
           </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+        )}
+      </div>
+
+      <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <Button className="h-12 text-base" disabled={!name.trim() || save.isPending} onClick={() => save.mutate()}>
+          {submitLabel}
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </DrawerFooter>
+    </>
   )
 }
 
 /* ───────────────────────────── detect drawer ───────────────────────────── */
 
-function DetectDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+function DetectDrawer({ onClose }: { onClose: () => void }) {
+  const detect = useQuery({
+    queryKey: ['detectAccounts'],
+    queryFn: () => LocalExpense.detectAccounts(),
+    staleTime: 0,
+    gcTime: 0,
+  })
+  const proposals = detect.data?.proposals ?? []
+
+  return (
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
+      <DrawerContent className="max-h-[92dvh]">
+        <DrawerHeader className="pb-2">
+          <DrawerTitle>Accounts in your messages</DrawerTitle>
+          <DrawerDescription>Pick the ones you want to track. You can fix balances afterwards.</DrawerDescription>
+        </DrawerHeader>
+
+        {detect.isPending ? (
+          <div className="space-y-2.5 overflow-y-auto px-4 pb-2">
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <RefreshCw className="size-4 animate-spin" /> Reading your stored messages…
+            </p>
+            <Skeleton className="h-16 w-full rounded-2xl" />
+            <Skeleton className="h-16 w-full rounded-2xl" />
+          </div>
+        ) : (
+          <DetectResults
+            key={detect.dataUpdatedAt}
+            proposals={proposals}
+            onRescan={() => void detect.refetch()}
+            onClose={onClose}
+          />
+        )}
+      </DrawerContent>
+    </Drawer>
+  )
+}
+
+function DetectResults({
+  proposals,
+  onRescan,
+  onClose,
+}: {
+  proposals: AccountProposal[]
+  onRescan: () => void
+  onClose: () => void
+}) {
   const client = useQueryClient()
-  const [proposals, setProposals] = useState<AccountProposal[]>([])
-  const [selected, setSelected] = useState<Set<AccountProposal>>(new Set())
+  const [selected, setSelected] = useState<Set<AccountProposal>>(() => new Set(proposals))
   const [expanded, setExpanded] = useState<AccountProposal | null>(null)
 
-  const detect = useMutation({
-    mutationFn: () => LocalExpense.detectAccounts(),
-    onSuccess: ({ proposals }) => {
-      setProposals(proposals)
-      setSelected(new Set(proposals))
-    },
-    onError: () => toast.error('Could not scan your messages. Try again.'),
-  })
-
-  useEffect(() => {
-    if (!open) return
-    setProposals([])
-    setSelected(new Set())
-    setExpanded(null)
-    detect.mutate()
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-
   const add = useMutation({
-    mutationFn: async () => {
-      for (const p of proposals) {
-        if (!selected.has(p)) continue
-        await LocalExpense.setAccountBalance({
-          name: p.name,
-          lastDigits: p.lastDigits,
-          type: toAccountType(p.type ?? 'BANK'),
-          balanceMinor: p.balanceMinor ?? 0,
-        })
-      }
-    },
+    mutationFn: () =>
+      Promise.all(
+        proposals
+          .filter((proposal) => selected.has(proposal))
+          .map((proposal) =>
+            LocalExpense.setAccountBalance({
+              name: proposal.name,
+              lastDigits: proposal.lastDigits,
+              type: toAccountType(proposal.type ?? 'BANK'),
+              balanceMinor: proposal.balanceMinor ?? 0,
+            }),
+          ),
+      ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.accounts })
       void client.invalidateQueries({ queryKey: queryKeys.balances })
@@ -723,120 +837,126 @@ function DetectDrawer({ open, onClose }: { open: boolean; onClose: () => void })
     onError: () => toast.error('Could not add the accounts. Try again.'),
   })
 
-  const toggle = (p: AccountProposal) =>
-    setSelected((cur) => {
-      const next = new Set(cur)
-      if (next.has(p)) next.delete(p)
-      else next.add(p)
+  const toggle = (proposal: AccountProposal) =>
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(proposal)) next.delete(proposal)
+      else next.add(proposal)
       return next
     })
 
+  const dismiss = (proposal: AccountProposal) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      next.delete(proposal)
+      return next
+    })
+    setExpanded((current) => (current === proposal ? null : current))
+  }
+
   return (
-    <Drawer open={open} onOpenChange={(o) => !o && onClose()}>
-      <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="pb-2">
-          <DrawerTitle>Accounts in your messages</DrawerTitle>
-          <DrawerDescription>Pick the ones you want to track. You can fix balances afterwards.</DrawerDescription>
-        </DrawerHeader>
-
-        <div className="space-y-2.5 overflow-y-auto px-4 pb-2">
-          {detect.isPending && (
-            <>
-              <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                <RefreshCw className="size-4 animate-spin" /> Reading your stored messages…
-              </p>
-              <Skeleton className="h-16 w-full rounded-2xl" />
-              <Skeleton className="h-16 w-full rounded-2xl" />
-            </>
-          )}
-
-          {!detect.isPending && proposals.length === 0 && (
-            <div className="flex flex-col items-center gap-3 rounded-3xl border border-dashed border-border px-6 py-10 text-center">
-              <IconTile tone="bg-muted text-muted-foreground"><Landmark className="size-5" /></IconTile>
-              <div>
-                <p className="font-medium">No accounts found</p>
-                <p className="mt-1 text-sm text-muted-foreground">Import your SMS history or wait for a few bank alerts, then scan again.</p>
-              </div>
-              <Button variant="outline" onClick={() => detect.mutate()}>
-                Scan again
-              </Button>
+    <>
+      <div className="space-y-2.5 overflow-y-auto px-4 pb-2">
+        {proposals.length === 0 && (
+          <div className="flex flex-col items-center gap-3 rounded-3xl border border-dashed border-border px-6 py-10 text-center">
+            <IconTile tone="bg-muted text-muted-foreground"><Landmark className="size-5" /></IconTile>
+            <div>
+              <p className="font-medium">No accounts found</p>
+              <p className="mt-1 text-sm text-muted-foreground">Import your SMS history or wait for a few bank alerts, then scan again.</p>
             </div>
-          )}
+            <Button variant="outline" onClick={onRescan}>
+              Scan again
+            </Button>
+          </div>
+        )}
 
-          {proposals.map((p, i) => {
-            const on = selected.has(p)
-            const open = expanded === p
-            const texts = p.sourceTexts ?? []
-            return (
-              <div key={`${p.lastDigits}-${i}`} className={cn('rounded-2xl border transition-colors', on ? 'border-indigo-400/60 bg-indigo-500/10' : 'border-border bg-card')}>
-                <div className="flex items-center gap-3 p-3">
-                  <button
-                    type="button"
-                    onClick={() => toggle(p)}
-                    aria-pressed={on}
-                    aria-label={`${on ? 'Deselect' : 'Select'} ${p.name}`}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  >
-                    <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-full border transition-colors', on ? 'border-indigo-400 bg-indigo-500 text-white' : 'border-border')}>
-                      {on && <Check className="size-3.5" />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">
-                        {p.name} <span className="text-muted-foreground">••{p.lastDigits}</span>
-                      </span>
-                      <span className="block text-xs text-muted-foreground">
-                        {kindMeta(toAccountType(p.type ?? 'BANK')).label}
-                        {p.balanceMinor != null ? `, last seen at ${formatMinor(p.balanceMinor)}` : ''}
-                      </span>
-                    </span>
-                  </button>
-                  {texts.length > 0 && (
-                    <Button size="icon" variant="ghost" className="size-9" aria-label="Show the messages behind this" onClick={() => setExpanded(open ? null : p)}>
-                      <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
-                    </Button>
-                  )}
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="size-9"
-                    aria-label={`Dismiss ${p.name}`}
-                    onClick={() => {
-                      setProposals((cur) => cur.filter((x) => x !== p))
-                      setSelected((cur) => {
-                        const next = new Set(cur)
-                        next.delete(p)
-                        return next
-                      })
-                    }}
-                  >
-                    <X className="size-4" />
-                  </Button>
-                </div>
-                {open && (
-                  <div className="space-y-2 border-t border-border/60 p-3">
-                    <p className="text-xs text-muted-foreground">Messages that pointed to this account</p>
-                    {texts.map((t: string, idx: number) => (
-                      <p key={idx} className="rounded-xl bg-muted px-3 py-2 text-xs">
-                        {t}
-                      </p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+        {proposals.map((proposal) => (
+          <ProposalCard
+            key={`${proposal.name}-${proposal.lastDigits}`}
+            proposal={proposal}
+            selected={selected.has(proposal)}
+            expanded={expanded === proposal}
+            onToggle={() => toggle(proposal)}
+            onExpand={() => setExpanded((current) => (current === proposal ? null : proposal))}
+            onDismiss={() => dismiss(proposal)}
+          />
+        ))}
+      </div>
+
+      <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <Button className="h-12 text-base" disabled={selected.size === 0 || add.isPending} onClick={() => add.mutate()}>
+          {add.isPending ? 'Adding…' : selected.size === 0 ? 'Select an account' : `Add ${plural(selected.size, 'account')}`}
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </DrawerFooter>
+    </>
+  )
+}
+
+function ProposalCard({
+  proposal,
+  selected,
+  expanded,
+  onToggle,
+  onExpand,
+  onDismiss,
+}: {
+  proposal: AccountProposal
+  selected: boolean
+  expanded: boolean
+  onToggle: () => void
+  onExpand: () => void
+  onDismiss: () => void
+}) {
+  const texts = proposal.sourceTexts ?? []
+  const kind = kindMeta(toAccountType(proposal.type ?? 'BANK'))
+  const balanceNote = proposal.balanceMinor != null ? `, last seen at ${formatMinor(proposal.balanceMinor)}` : ''
+
+  return (
+    <div className={cn('rounded-2xl border transition-colors', selected ? 'border-indigo-400/60 bg-indigo-500/10' : 'border-border bg-card')}>
+      <div className="flex items-center gap-3 p-3">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={selected}
+          aria-label={`${selected ? 'Deselect' : 'Select'} ${proposal.name}`}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-full border transition-colors', selected ? 'border-indigo-400 bg-indigo-500 text-white' : 'border-border')}>
+            {selected && <Check className="size-3.5" />}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium">
+              {proposal.name} <span className="text-muted-foreground">••{proposal.lastDigits}</span>
+            </span>
+            <span className="block text-xs text-muted-foreground">
+              {kind.label}
+              {balanceNote}
+            </span>
+          </span>
+        </button>
+        {texts.length > 0 && (
+          <Button size="icon" variant="ghost" className="size-9" aria-label="Show the messages behind this" onClick={onExpand}>
+            <ChevronDown className={cn('size-4 transition-transform', expanded && 'rotate-180')} />
+          </Button>
+        )}
+        <Button size="icon" variant="ghost" className="size-9" aria-label={`Dismiss ${proposal.name}`} onClick={onDismiss}>
+          <X className="size-4" />
+        </Button>
+      </div>
+      {expanded && (
+        <div className="space-y-2 border-t border-border/60 p-3">
+          <p className="text-xs text-muted-foreground">Messages that pointed to this account</p>
+          {texts.map((text) => (
+            <p key={text} className="rounded-xl bg-muted px-3 py-2 text-xs">
+              {text}
+            </p>
+          ))}
         </div>
-
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <Button className="h-12 text-base" disabled={selected.size === 0 || add.isPending} onClick={() => add.mutate()}>
-            {add.isPending ? 'Adding…' : selected.size === 0 ? 'Select an account' : `Add ${plural(selected.size, 'account')}`}
-          </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+      )}
+    </div>
   )
 }
 
@@ -853,39 +973,44 @@ function DeveloperGroup() {
       setProgress('Setting up accounts…')
       const categories = (await LocalExpense.listCategories()).categories
       const expenseCats = categories.filter((c) => c.kind === 'EXPENSE')
-      await LocalExpense.setAccountBalance({ name: 'HDFC Savings', lastDigits: '4821', type: 'BANK', balanceMinor: 12500000 })
-      await LocalExpense.setAccountBalance({ name: 'Cash Wallet', lastDigits: '0000', type: 'CASH', balanceMinor: 650000 })
+      await Promise.all([
+        LocalExpense.setAccountBalance({ name: 'HDFC Savings', lastDigits: '4821', type: 'BANK', balanceMinor: 12500000 }),
+        LocalExpense.setAccountBalance({ name: 'Cash Wallet', lastDigits: '0000', type: 'CASH', balanceMinor: 650000 }),
+      ])
 
       const merchants = ['Swiggy', 'Zomato', 'Amazon', 'Uber', 'BigBasket', 'Netflix', 'Spotify', 'Electricity Board', 'Rent', 'Pharmacy']
-      const total = 80
-      for (let i = 0; i < total; i++) {
-        setProgress(`Adding transactions ${i + 1} of ${total}…`)
-        const occurredAt = Date.now() - Math.floor(Math.random() * 90) * 24 * 60 * 60 * 1000
-        const income = Math.random() > 0.85 // one roll, so direction and kind always agree
-        await LocalExpense.createManualTransaction({
-          amountMinor: Math.round((50 + Math.random() * 4950) * 100),
-          direction: income ? 'CREDIT' : 'DEBIT',
-          kind: income ? 'INCOME' : 'SPEND',
-          categoryId: expenseCats[Math.floor(Math.random() * expenseCats.length)]?.id ?? null,
-          merchantName: merchants[Math.floor(Math.random() * merchants.length)],
-          occurredAt,
-          note: null,
-        })
-      }
+      setProgress('Adding transactions…')
+      await Promise.all(
+        Array.from({ length: 80 }, () => {
+          const occurredAt = Date.now() - Math.floor(Math.random() * 90) * 24 * 60 * 60 * 1000
+          const income = Math.random() > 0.85
+          return LocalExpense.createManualTransaction({
+            amountMinor: Math.round((50 + Math.random() * 4950) * 100),
+            direction: income ? 'CREDIT' : 'DEBIT',
+            kind: income ? 'INCOME' : 'SPEND',
+            categoryId: expenseCats[Math.floor(Math.random() * expenseCats.length)]?.id ?? null,
+            merchantName: merchants[Math.floor(Math.random() * merchants.length)],
+            occurredAt,
+            note: null,
+          })
+        }),
+      )
 
       setProgress('Adding bills, goals and limits…')
-      await LocalExpense.upsertCommitment({ name: 'Apartment Rent', amountMinor: 2800000, dueAt: Date.now() + 5 * 24 * 60 * 60 * 1000, recurrence: 'MONTHLY' })
-      await LocalExpense.upsertCommitment({ name: 'Electricity', amountMinor: 345000, dueAt: Date.now() + 12 * 24 * 60 * 60 * 1000, recurrence: 'MONTHLY' })
-      await LocalExpense.upsertGoal({ name: 'Emergency Cushion', targetMinor: 15000000, savedMinor: 4000000 })
-      await LocalExpense.upsertGoal({ name: 'Workstation Upgrade', targetMinor: 12000000, savedMinor: 2500000 })
-      await LocalExpense.upsertBudget({ categoryId: expenseCats[0]?.id ?? null, period: 'MONTHLY', limitMinor: 1500000 })
-      await LocalExpense.setFinancialSettings({
-        bufferMinor: 5000000,
-        incomeDay: 1,
-        expectedIncomeMinor: 8500000,
-        essentialCategories: expenseCats.slice(0, 3).map((c) => c.id),
-      })
-      await LocalExpense.setOnboardingComplete({ completed: true })
+      await Promise.all([
+        LocalExpense.upsertCommitment({ name: 'Apartment Rent', amountMinor: 2800000, dueAt: Date.now() + 5 * 24 * 60 * 60 * 1000, recurrence: 'MONTHLY' }),
+        LocalExpense.upsertCommitment({ name: 'Electricity', amountMinor: 345000, dueAt: Date.now() + 12 * 24 * 60 * 60 * 1000, recurrence: 'MONTHLY' }),
+        LocalExpense.upsertGoal({ name: 'Emergency Cushion', targetMinor: 15000000, savedMinor: 4000000 }),
+        LocalExpense.upsertGoal({ name: 'Workstation Upgrade', targetMinor: 12000000, savedMinor: 2500000 }),
+        LocalExpense.upsertBudget({ categoryId: expenseCats[0]?.id ?? null, period: 'MONTHLY', limitMinor: 1500000 }),
+        LocalExpense.setFinancialSettings({
+          bufferMinor: 5000000,
+          incomeDay: 1,
+          expectedIncomeMinor: 8500000,
+          essentialCategories: expenseCats.slice(0, 3).map((c) => c.id),
+        }),
+        LocalExpense.setOnboardingComplete({ completed: true }),
+      ])
       void client.invalidateQueries()
       toast.success('Sample data added')
     } catch (error) {

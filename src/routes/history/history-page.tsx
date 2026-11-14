@@ -432,15 +432,163 @@ function EventRow({ event, onOpen }: { event: RawEvent; onOpen: () => void }) {
 
 /* ───────────────────────────── detail drawer ───────────────────────────── */
 
-function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () => void }) {
+type EventStatusStyle = (typeof STATUS)[keyof typeof STATUS]
+
+function EventHeader({ event, st }: { event: RawEvent; st: EventStatusStyle }) {
+  return (
+    <DrawerHeader className="items-center pb-2 text-center">
+      <span className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+        {isSms(event) ? <MessageSquare className="size-6" /> : <Bell className="size-6" />}
+      </span>
+      <DrawerTitle className="mt-2">{titleOf(event)}</DrawerTitle>
+      <DrawerDescription>
+        {isSms(event) ? 'SMS' : 'Notification'} from {shortSource(event)}, {formatRelativeTime(event.postedAt)}
+      </DrawerDescription>
+      <span className={cn('mt-1 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', st.chip)}>
+        {st.icon}
+        {st.label}
+      </span>
+    </DrawerHeader>
+  )
+}
+
+function EventMessage({ event, tx }: { event: RawEvent; tx: RawEvent['transaction'] }) {
+  return (
+    <>
+      <div className="rounded-2xl bg-muted/60 p-3.5">
+        <p className="mb-1 text-xs text-muted-foreground">The message</p>
+        <p className="whitespace-pre-wrap text-sm leading-relaxed">
+          <Highlighted text={messageOf(event)} merchant={tx?.merchantName} />
+        </p>
+      </div>
+
+      {tx && (
+        <div className="flex items-center gap-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-3.5">
+          <ArrowRight className="size-5 shrink-0 text-emerald-300" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-muted-foreground">It became</p>
+            <p className="truncate text-sm font-medium">
+              {[tx.merchantName, tx.categoryName].filter(Boolean).join(', ') || 'A transaction'}
+            </p>
+          </div>
+          <p className="text-lg font-bold tabular-nums">{formatMinor(tx.amountMinor)}</p>
+        </div>
+      )}
+    </>
+  )
+}
+
+function EventActions({
+  event,
+  removed,
+  busy,
+  onRestore,
+  onPromote,
+  onIgnore,
+  onDismiss,
+}: {
+  event: RawEvent
+  removed: boolean
+  busy: boolean
+  onRestore: () => void
+  onPromote: (kind: 'SPEND' | 'INCOME') => void
+  onIgnore: () => void
+  onDismiss: () => void
+}) {
+  if (event.status === 'NEEDS_REVIEW') {
+    return (
+      <Button asChild className="h-11 w-full">
+        <Link to="/review">Go to the review inbox</Link>
+      </Button>
+    )
+  }
+
+  if (removed) {
+    return (
+      <Button className="h-11 w-full" disabled={busy} onClick={onRestore}>
+        <Undo2 className="size-4" />
+        Restore this message
+      </Button>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="outline" className="h-11" disabled={busy} onClick={() => onPromote('SPEND')}>
+          Count as spend
+        </Button>
+        <Button variant="outline" className="h-11" disabled={busy} onClick={() => onPromote('INCOME')}>
+          Count as income
+        </Button>
+      </div>
+      <Button variant="outline" className="h-11 w-full" disabled={busy} onClick={onIgnore}>
+        <EyeOff className="size-4" />
+        Ignore messages like this
+      </Button>
+      <Button variant="ghost" className="h-11 w-full" disabled={busy} onClick={onDismiss}>
+        Remove this one
+      </Button>
+      <p className="px-1 text-xs text-muted-foreground">Removing undoes the transaction and its effect on your balances. You can restore it later.</p>
+    </div>
+  )
+}
+
+function EventTechnical({
+  event,
+  open,
+  onToggle,
+}: {
+  event: RawEvent
+  open: boolean
+  onToggle: () => void
+}) {
+  return (
+    <div className="rounded-2xl border border-border">
+      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between px-3.5 py-3 text-sm text-muted-foreground">
+        Technical details
+        <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <dl className="space-y-2.5 border-t border-border px-3.5 py-3 text-xs">
+          <Detail label="Source" value={event.source} />
+          <Detail label="Posted" value={formatDateTime(event.postedAt)} />
+          {event.duplicateOf && <Detail label="Duplicate of" value={event.duplicateOf} />}
+          <Detail label="Notification key" value={event.notificationKey} />
+          <Detail label="Content hash" value={event.contentHash} />
+          {event.textLines && <Detail label="Text lines" value={event.textLines} />}
+        </dl>
+      )}
+    </div>
+  )
+}
+
+function EventDeleteButton({
+  confirm,
+  busy,
+  onDelete,
+}: {
+  confirm: boolean
+  busy: boolean
+  onDelete: () => void
+}) {
+  return (
+    <Button
+      variant="ghost"
+      className={cn('w-full', confirm ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
+      disabled={busy}
+      onClick={onDelete}
+    >
+      <Trash2 className="size-4" />
+      {confirm ? 'Tap again to delete this for good' : 'Delete permanently'}
+    </Button>
+  )
+}
+
+function EventDrawerBody({ event, onClose }: { event: RawEvent; onClose: () => void }) {
   const client = useQueryClient()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [techOpen, setTechOpen] = useState(false)
-
-  useEffect(() => {
-    setConfirmDelete(false)
-    setTechOpen(false)
-  }, [event?.id])
 
   const refresh = () => {
     void client.invalidateQueries({ queryKey: ['rawEvents'] })
@@ -449,9 +597,9 @@ function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () =
   }
 
   const dismiss = useMutation({
-    mutationFn: () => LocalExpense.dismissEvent({ id: event!.id }),
+    mutationFn: () => LocalExpense.dismissEvent({ id: event.id }),
     onSuccess: () => {
-      const id = event!.id
+      const id = event.id
       refresh()
       onClose()
       toast('Removed', {
@@ -467,7 +615,7 @@ function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () =
   })
 
   const restore = useMutation({
-    mutationFn: () => LocalExpense.restoreEvent({ id: event!.id }),
+    mutationFn: () => LocalExpense.restoreEvent({ id: event.id }),
     onSuccess: () => {
       refresh()
       onClose()
@@ -477,7 +625,7 @@ function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () =
   })
 
   const ignore = useMutation({
-    mutationFn: () => LocalExpense.createIgnoreRule({ id: event!.id }),
+    mutationFn: () => LocalExpense.createIgnoreRule({ id: event.id }),
     onSuccess: () => {
       refresh()
       onClose()
@@ -489,10 +637,10 @@ function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () =
   const promote = useMutation({
     mutationFn: (kind: 'SPEND' | 'INCOME') =>
       LocalExpense.promoteEvent({
-        id: event!.id,
+        id: event.id,
         as: kind,
-        amountMinor: event!.transaction?.amountMinor,
-        merchantName: event!.transaction?.merchantName ?? undefined,
+        amountMinor: event.transaction?.amountMinor,
+        merchantName: event.transaction?.merchantName ?? undefined,
       }),
     onSuccess: ({ promoted }) => {
       refresh()
@@ -503,7 +651,7 @@ function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () =
   })
 
   const removeForever = useMutation({
-    mutationFn: () => LocalExpense.deleteRawEvent({ id: event!.id }),
+    mutationFn: () => LocalExpense.deleteRawEvent({ id: event.id }),
     onSuccess: () => {
       refresh()
       onClose()
@@ -513,118 +661,58 @@ function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () =
   })
 
   const busy = dismiss.isPending || restore.isPending || ignore.isPending || promote.isPending || removeForever.isPending
-  const removed = event?.status === 'DISMISSED'
-  const st = event ? STATUS[event.status] : null
-  const tx = event?.transaction
+  const removed = event.status === 'DISMISSED'
+  const st = STATUS[event.status]
+  const tx = event.transaction
 
   return (
-    <Drawer open={event !== null} onOpenChange={(open) => !open && onClose()}>
+    <>
+      <EventHeader event={event} st={st} />
+
+      <div className="space-y-4 overflow-y-auto px-4 pb-2">
+        <EventMessage event={event} tx={tx} />
+
+        <EventActions
+          event={event}
+          removed={removed}
+          busy={busy}
+          onRestore={() => restore.mutate()}
+          onPromote={(kind) => promote.mutate(kind)}
+          onIgnore={() => ignore.mutate()}
+          onDismiss={() => dismiss.mutate()}
+        />
+
+        <EventTechnical event={event} open={techOpen} onToggle={() => setTechOpen((open) => !open)} />
+
+        <EventDeleteButton
+          confirm={confirmDelete}
+          busy={busy}
+          onDelete={() => (confirmDelete ? removeForever.mutate() : setConfirmDelete(true))}
+        />
+      </div>
+
+      <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <Button variant="outline" className="h-12" onClick={onClose}>
+          Close
+        </Button>
+      </DrawerFooter>
+    </>
+  )
+}
+
+function EventDrawer({ event, onClose }: { event: RawEvent | null; onClose: () => void }) {
+  if (!event) {
+    return (
+      <Drawer open={false} onOpenChange={() => {}}>
+        <DrawerContent />
+      </Drawer>
+    )
+  }
+
+  return (
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
       <DrawerContent className="max-h-[92dvh]">
-        {event && st && (
-          <>
-            <DrawerHeader className="items-center pb-2 text-center">
-              <span className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-                {isSms(event) ? <MessageSquare className="size-6" /> : <Bell className="size-6" />}
-              </span>
-              <DrawerTitle className="mt-2">{titleOf(event)}</DrawerTitle>
-              <DrawerDescription>
-                {isSms(event) ? 'SMS' : 'Notification'} from {shortSource(event)}, {formatRelativeTime(event.postedAt)}
-              </DrawerDescription>
-              <span className={cn('mt-1 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', st.chip)}>
-                {st.icon}
-                {st.label}
-              </span>
-            </DrawerHeader>
-
-            <div className="space-y-4 overflow-y-auto px-4 pb-2">
-              <div className="rounded-2xl bg-muted/60 p-3.5">
-                <p className="mb-1 text-xs text-muted-foreground">The message</p>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                  <Highlighted text={messageOf(event)} merchant={tx?.merchantName} />
-                </p>
-              </div>
-
-              {tx && (
-                <div className="flex items-center gap-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-3.5">
-                  <ArrowRight className="size-5 shrink-0 text-emerald-300" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs text-muted-foreground">It became</p>
-                    <p className="truncate text-sm font-medium">
-                      {[tx.merchantName, tx.categoryName].filter(Boolean).join(', ') || 'A transaction'}
-                    </p>
-                  </div>
-                  <p className="text-lg font-bold tabular-nums">{formatMinor(tx.amountMinor)}</p>
-                </div>
-              )}
-
-              {event.status === 'NEEDS_REVIEW' && (
-                <Button asChild className="h-11 w-full">
-                  <Link to="/review">Go to the review inbox</Link>
-                </Button>
-              )}
-
-              {removed ? (
-                <Button className="h-11 w-full" disabled={busy} onClick={() => restore.mutate()}>
-                  <Undo2 className="size-4" />
-                  Restore this message
-                </Button>
-              ) : (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button variant="outline" className="h-11" disabled={busy} onClick={() => promote.mutate('SPEND')}>
-                      Count as spend
-                    </Button>
-                    <Button variant="outline" className="h-11" disabled={busy} onClick={() => promote.mutate('INCOME')}>
-                      Count as income
-                    </Button>
-                  </div>
-                  <Button variant="outline" className="h-11 w-full" disabled={busy} onClick={() => ignore.mutate()}>
-                    <EyeOff className="size-4" />
-                    Ignore messages like this
-                  </Button>
-                  <Button variant="ghost" className="h-11 w-full" disabled={busy} onClick={() => dismiss.mutate()}>
-                    Remove this one
-                  </Button>
-                  <p className="px-1 text-xs text-muted-foreground">Removing undoes the transaction and its effect on your balances. You can restore it later.</p>
-                </div>
-              )}
-
-              {/* technical details */}
-              <div className="rounded-2xl border border-border">
-                <button type="button" onClick={() => setTechOpen((o) => !o)} className="flex w-full items-center justify-between px-3.5 py-3 text-sm text-muted-foreground">
-                  Technical details
-                  <ChevronDown className={cn('size-4 transition-transform', techOpen && 'rotate-180')} />
-                </button>
-                {techOpen && (
-                  <dl className="space-y-2.5 border-t border-border px-3.5 py-3 text-xs">
-                    <Detail label="Source" value={event.source} />
-                    <Detail label="Posted" value={formatDateTime(event.postedAt)} />
-                    {event.duplicateOf && <Detail label="Duplicate of" value={event.duplicateOf} />}
-                    <Detail label="Notification key" value={event.notificationKey} />
-                    <Detail label="Content hash" value={event.contentHash} />
-                    {event.textLines && <Detail label="Text lines" value={event.textLines} />}
-                  </dl>
-                )}
-              </div>
-
-              <Button
-                variant="ghost"
-                className={cn('w-full', confirmDelete ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
-                disabled={busy}
-                onClick={() => (confirmDelete ? removeForever.mutate() : setConfirmDelete(true))}
-              >
-                <Trash2 className="size-4" />
-                {confirmDelete ? 'Tap again to delete this for good' : 'Delete permanently'}
-              </Button>
-            </div>
-
-            <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-              <Button variant="outline" className="h-12" onClick={onClose}>
-                Close
-              </Button>
-            </DrawerFooter>
-          </>
-        )}
+        <EventDrawerBody key={event.id} event={event} onClose={onClose} />
       </DrawerContent>
     </Drawer>
   )

@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { MoneyField } from '@/components/money-field'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /* ────────────────────────────── helpers ────────────────────────────── */
@@ -108,36 +109,7 @@ function Segmented<T extends string>({
   )
 }
 
-function MoneyField({
-  label,
-  value,
-  onChange,
-  placeholder = '0',
-  hint,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  placeholder?: string
-  hint?: string
-}) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      <div className="relative">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">{currencySymbol}</span>
-        <Input
-          className="h-11 pl-8 tabular-nums"
-          inputMode="decimal"
-          value={value}
-          placeholder={placeholder}
-          onChange={(e) => onChange(cleanAmount(e.target.value))}
-        />
-      </div>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  )
-}
+
 
 /* ───────────────────────────── page ───────────────────────────── */
 
@@ -396,99 +368,295 @@ function AddGoalDrawer({
   onSave: (input: GoalInput, done: () => void) => void
   pending: boolean
 }) {
-  const [name, setName] = useState('')
-  const [target, setTarget] = useState('')
-  const [saved, setSaved] = useState('')
-  const [monthly, setMonthly] = useState('')
-
-  useEffect(() => {
-    if (state) {
-      setName(state.name)
-      setTarget('')
-      setSaved('')
-      setMonthly('')
-    }
-  }, [state])
-
-  const targetMinor = parseMajorToMinor(target) ?? 0
-  const valid = name.trim().length > 0 && targetMinor > 0
-
   return (
     <Drawer open={state !== null} onOpenChange={(open) => !open && onClose()}>
       <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="pb-2">
-          <DrawerTitle>New goal</DrawerTitle>
-          <DrawerDescription>What are you saving for, and how much will it take?</DrawerDescription>
-        </DrawerHeader>
-
-        <div className="space-y-4 overflow-y-auto px-4 pb-2">
-          <div className="space-y-2">
-            <Label htmlFor="goal-name">Name</Label>
-            <Input id="goal-name" className="h-11" value={name} onChange={(e) => setName(e.target.value)} placeholder="Trip to Goa" />
-            <div className="flex flex-wrap gap-2">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setName(s)}
-                  className={cn(
-                    'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs',
-                    name === s ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200' : 'border-border bg-card text-muted-foreground',
-                  )}
-                >
-                  {goalMeta(s).emoji} {s}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <MoneyField label="Target amount" value={target} onChange={setTarget} />
-          <div className="grid grid-cols-2 gap-3">
-            <MoneyField label="Saved so far" value={saved} onChange={setSaved} />
-            <MoneyField label="Per month" value={monthly} onChange={setMonthly} />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            A monthly amount is optional. With it, you'll see roughly when you'll finish.
-          </p>
-        </div>
-
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <Button
-            className="h-12 text-base"
-            disabled={!valid || pending}
-            onClick={() =>
-              onSave(
-                {
-                  name: name.trim(),
-                  targetMinor,
-                  savedMinor: parseMajorToMinor(saved) ?? 0,
-                  monthlyContributionMinor: parseMajorToMinor(monthly) ?? 0,
-                },
-                onClose,
-              )
-            }
-          >
-            {pending ? 'Adding…' : 'Add goal'}
-          </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-        </DrawerFooter>
+        <AddGoalDrawerBody key={state?.name ?? 'closed'} state={state} onClose={onClose} onSave={onSave} pending={pending} />
       </DrawerContent>
     </Drawer>
   )
 }
 
+function AddGoalDrawerBody({
+  state,
+  onClose,
+  onSave,
+  pending,
+}: {
+  state: { name: string } | null
+  onClose: () => void
+  onSave: (input: GoalInput, done: () => void) => void
+  pending: boolean
+}) {
+  const [name, setName] = useState(() => state?.name ?? '')
+  const [target, setTarget] = useState('')
+  const [saved, setSaved] = useState('')
+  const [monthly, setMonthly] = useState('')
+
+  const targetMinor = parseMajorToMinor(target) ?? 0
+  const valid = name.trim().length > 0 && targetMinor > 0
+
+  return (
+    <>
+      <DrawerHeader className="pb-2">
+        <DrawerTitle>New goal</DrawerTitle>
+        <DrawerDescription>What are you saving for, and how much will it take?</DrawerDescription>
+      </DrawerHeader>
+
+      <div className="space-y-4 overflow-y-auto px-4 pb-2">
+        <div className="space-y-2">
+          <Label htmlFor="goal-name">Name</Label>
+          <Input id="goal-name" className="h-11" value={name} onChange={(e) => setName(e.target.value)} placeholder="Trip to Goa" />
+          <div className="flex flex-wrap gap-2">
+            {SUGGESTIONS.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onClick={() => setName(suggestion)}
+                className={cn(
+                  'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs',
+                  name === suggestion ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200' : 'border-border bg-card text-muted-foreground',
+                )}
+              >
+                {goalMeta(suggestion).emoji} {suggestion}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <MoneyField label="Target amount" value={target} onChange={setTarget} placeholder="0" />
+        <div className="grid grid-cols-2 gap-3">
+          <MoneyField label="Saved so far" value={saved} onChange={setSaved} placeholder="0" />
+          <MoneyField label="Per month" value={monthly} onChange={setMonthly} placeholder="0" />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          A monthly amount is optional. With it, you'll see roughly when you'll finish.
+        </p>
+      </div>
+
+      <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <Button
+          className="h-12 text-base"
+          disabled={!valid || pending}
+          onClick={() =>
+            onSave(
+              {
+                name: name.trim(),
+                targetMinor,
+                savedMinor: parseMajorToMinor(saved) ?? 0,
+                monthlyContributionMinor: parseMajorToMinor(monthly) ?? 0,
+              },
+              onClose,
+            )
+          }
+        >
+          {pending ? 'Adding…' : 'Add goal'}
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </DrawerFooter>
+    </>
+  )
+}
+
 /* ───────────────────────────── goal drawer ───────────────────────────── */
 
-function GoalDrawer({
+function goalProgressText(goal: Goal) {
+  const remaining = Math.max(0, goal.targetMinor - goal.savedMinor)
+  if (remaining === 0) return `${formatMinor(goal.savedMinor)} of ${formatMinor(goal.targetMinor)}, reached`
+  return `${formatMinor(goal.savedMinor)} of ${formatMinor(goal.targetMinor)}, ${formatMinor(remaining)} to go`
+}
+
+function goalQuickAmounts(remaining: number) {
+  if (remaining <= 0) return []
+  return [
+    { label: 'A quarter', minor: Math.round(remaining / 4) },
+    { label: 'Half', minor: Math.round(remaining / 2) },
+    { label: 'Finish it', minor: remaining },
+  ]
+}
+
+function goalAddMessage(addMinor: number, afterPct: number, goal: Goal) {
+  if (addMinor <= 0) return `You're at ${Math.round(pctOf(goal))}% right now.`
+  if (afterPct >= 100) return 'This reaches your goal.'
+  return `This takes you to ${Math.round(afterPct)}%.`
+}
+
+function GoalAddPanel({
+  goal,
+  amount,
+  onAmount,
+  addMinor,
+  afterPct,
+  quick,
+}: {
+  goal: Goal
+  amount: string
+  onAmount: (value: string) => void
+  addMinor: number
+  afterPct: number
+  quick: { label: string; minor: number }[]
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-baseline justify-center gap-1.5 py-1">
+        <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
+        <input
+          inputMode="decimal"
+          value={amount}
+          onChange={(e) => onAmount(cleanAmount(e.target.value))}
+          placeholder="0"
+          aria-label="Amount to add"
+          className="w-48 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
+        />
+      </div>
+
+      {quick.length > 0 && (
+        <div className="flex justify-center gap-2">
+          {quick.map((amountOption) => (
+            <button
+              key={amountOption.label}
+              type="button"
+              onClick={() => onAmount((amountOption.minor / 100).toFixed(2))}
+              className="rounded-full border border-border bg-card px-3 py-1.5 text-xs active:scale-95"
+            >
+              <span className="font-medium">{amountOption.label}</span>
+              <span className="ml-1.5 text-muted-foreground tabular-nums">{formatMinor(amountOption.minor)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div>
+        <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-emerald-400 transition-[width] duration-300" style={{ width: `${afterPct}%` }} />
+        </div>
+        <p className="mt-2 text-center text-xs text-muted-foreground">{goalAddMessage(addMinor, afterPct, goal)}</p>
+      </div>
+    </div>
+  )
+}
+
+function GoalEditPanel({
+  name,
+  onName,
+  target,
+  onTarget,
+  saved,
+  onSaved,
+  monthly,
+  onMonthly,
+  confirmRemove,
+  pending,
+  onRemove,
+}: {
+  name: string
+  onName: (value: string) => void
+  target: string
+  onTarget: (value: string) => void
+  saved: string
+  onSaved: (value: string) => void
+  monthly: string
+  onMonthly: (value: string) => void
+  confirmRemove: boolean
+  pending: boolean
+  onRemove: () => void
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1.5">
+        <Label>Name</Label>
+        <Input className="h-11" value={name} onChange={(e) => onName(e.target.value)} />
+      </div>
+      <MoneyField label="Target amount" value={target} onChange={onTarget} placeholder="0" />
+      <div className="grid grid-cols-2 gap-3">
+        <MoneyField label="Saved so far" value={saved} onChange={onSaved} placeholder="0" />
+        <MoneyField label="Per month" value={monthly} onChange={onMonthly} placeholder="0" />
+      </div>
+      <Button
+        variant="ghost"
+        className={cn('w-full', confirmRemove ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
+        disabled={pending}
+        onClick={onRemove}
+      >
+        {confirmRemove ? 'Tap again to remove this goal for good' : 'Remove goal'}
+      </Button>
+    </div>
+  )
+}
+
+function GoalDrawerFooter({
+  view,
+  addMinor,
+  editValid,
+  pending,
+  addLabel,
+  onAdd,
+  onSave,
+  onClose,
+}: {
+  view: 'add' | 'edit'
+  addMinor: number
+  editValid: boolean
+  pending: boolean
+  addLabel: string
+  onAdd: () => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  return (
+    <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="mx-auto flex w-full max-w-lg gap-2">
+        <Button variant="outline" className="h-12 flex-1" onClick={onClose}>
+          Cancel
+        </Button>
+        {view === 'add' ? (
+          <Button className="h-12 flex-[1.4]" disabled={addMinor <= 0 || pending} onClick={onAdd}>
+            {pending ? 'Saving…' : addLabel}
+          </Button>
+        ) : (
+          <Button className="h-12 flex-[1.4]" disabled={!editValid || pending} onClick={onSave}>
+            {pending ? 'Saving…' : 'Save changes'}
+          </Button>
+        )}
+      </div>
+    </DrawerFooter>
+  )
+}
+
+function GoalDrawer(props: {
+  goal: Goal | null
+  onClose: () => void
+  onSave: (input: GoalInput, message: string, done: () => void) => void
+  onRemove: (id: string) => void
+  pending: boolean
+}) {
+  if (!props.goal) {
+    return (
+      <Drawer open={false} onOpenChange={() => {}}>
+        <DrawerContent />
+      </Drawer>
+    )
+  }
+
+  return (
+    <Drawer open onOpenChange={(open) => !open && props.onClose()}>
+      <DrawerContent className="max-h-[92dvh]">
+        <GoalDrawerBody key={props.goal.id} {...props} goal={props.goal} />
+      </DrawerContent>
+    </Drawer>
+  )
+}
+
+function GoalDrawerBody({
   goal,
   onClose,
   onSave,
   onRemove,
   pending,
 }: {
-  goal: Goal | null
+  goal: Goal
   onClose: () => void
   onSave: (input: GoalInput, message: string, done: () => void) => void
   onRemove: (id: string) => void
@@ -496,181 +664,104 @@ function GoalDrawer({
 }) {
   const [view, setView] = useState<'add' | 'edit'>('add')
   const [amount, setAmount] = useState('')
-  const [name, setName] = useState('')
-  const [target, setTarget] = useState('')
-  const [saved, setSaved] = useState('')
-  const [monthly, setMonthly] = useState('')
+  const [name, setName] = useState(goal.name)
+  const [target, setTarget] = useState(() => (goal.targetMinor / 100).toFixed(2))
+  const [saved, setSaved] = useState(() => (goal.savedMinor / 100).toFixed(2))
+  const [monthly, setMonthly] = useState(() =>
+    goal.monthlyContributionMinor > 0 ? (goal.monthlyContributionMinor / 100).toFixed(2) : '',
+  )
   const [confirmRemove, setConfirmRemove] = useState(false)
-
-  useEffect(() => {
-    if (!goal) return
-    setView('add')
-    setAmount('')
-    setConfirmRemove(false)
-    setName(goal.name)
-    setTarget((goal.targetMinor / 100).toFixed(2))
-    setSaved((goal.savedMinor / 100).toFixed(2))
-    setMonthly(goal.monthlyContributionMinor > 0 ? (goal.monthlyContributionMinor / 100).toFixed(2) : '')
-  }, [goal?.id]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!goal) {
-    return <Drawer open={false} onOpenChange={() => {}}><DrawerContent /></Drawer>
-  }
 
   const meta = goalMeta(goal.name)
   const remaining = Math.max(0, goal.targetMinor - goal.savedMinor)
   const addMinor = parseMajorToMinor(amount) ?? 0
   const afterPct = goal.targetMinor > 0 ? Math.min(100, ((goal.savedMinor + addMinor) / goal.targetMinor) * 100) : 0
-  const quick = remaining > 0
-    ? [
-        { label: 'A quarter', minor: Math.round(remaining / 4) },
-        { label: 'Half', minor: Math.round(remaining / 2) },
-        { label: 'Finish it', minor: remaining },
-      ]
-    : []
+  const quick = goalQuickAmounts(remaining)
+  const addLabel = addMinor > 0 ? `Add ${formatMinor(addMinor)}` : 'Add money'
 
   const editTarget = parseMajorToMinor(target) ?? 0
   const editValid = name.trim().length > 0 && editTarget > 0
 
   return (
-    <Drawer open onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="items-center pb-2 text-center">
-          <span className={cn('flex size-14 items-center justify-center rounded-2xl text-3xl', meta.tint)}>{meta.emoji}</span>
-          <DrawerTitle className="mt-2">{goal.name}</DrawerTitle>
-          <DrawerDescription>
-            {formatMinor(goal.savedMinor)} of {formatMinor(goal.targetMinor)}
-            {remaining > 0 ? `, ${formatMinor(remaining)} to go` : ', reached'}
-          </DrawerDescription>
-        </DrawerHeader>
+    <>
+      <DrawerHeader className="items-center pb-2 text-center">
+        <span className={cn('flex size-14 items-center justify-center rounded-2xl text-3xl', meta.tint)}>{meta.emoji}</span>
+        <DrawerTitle className="mt-2">{goal.name}</DrawerTitle>
+        <DrawerDescription>{goalProgressText(goal)}</DrawerDescription>
+      </DrawerHeader>
 
-        <div className="space-y-4 overflow-y-auto px-4 pb-2">
-          <Segmented
-            options={[
-              { key: 'add', label: 'Add money' },
-              { key: 'edit', label: 'Edit goal' },
-            ]}
-            value={view}
-            onChange={setView}
+      <div className="space-y-4 overflow-y-auto px-4 pb-2">
+        <Segmented
+          options={[
+            { key: 'add', label: 'Add money' },
+            { key: 'edit', label: 'Edit goal' },
+          ]}
+          value={view}
+          onChange={setView}
+        />
+
+        {view === 'add' && (
+          <GoalAddPanel
+            goal={goal}
+            amount={amount}
+            onAmount={setAmount}
+            addMinor={addMinor}
+            afterPct={afterPct}
+            quick={quick}
           />
+        )}
 
-          {view === 'add' && (
-            <div className="space-y-4">
-              <div className="flex items-baseline justify-center gap-1.5 py-1">
-                <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
-                <input
-                  inputMode="decimal"
-                  value={amount}
-                  onChange={(e) => setAmount(cleanAmount(e.target.value))}
-                  placeholder="0"
-                  aria-label="Amount to add"
-                  className="w-48 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
-                />
-              </div>
+        {view === 'edit' && (
+          <GoalEditPanel
+            name={name}
+            onName={setName}
+            target={target}
+            onTarget={setTarget}
+            saved={saved}
+            onSaved={setSaved}
+            monthly={monthly}
+            onMonthly={setMonthly}
+            confirmRemove={confirmRemove}
+            pending={pending}
+            onRemove={() => (confirmRemove ? onRemove(goal.id) : setConfirmRemove(true))}
+          />
+        )}
+      </div>
 
-              {quick.length > 0 && (
-                <div className="flex justify-center gap-2">
-                  {quick.map((q) => (
-                    <button
-                      key={q.label}
-                      type="button"
-                      onClick={() => setAmount((q.minor / 100).toFixed(2))}
-                      className="rounded-full border border-border bg-card px-3 py-1.5 text-xs active:scale-95"
-                    >
-                      <span className="font-medium">{q.label}</span>
-                      <span className="ml-1.5 text-muted-foreground tabular-nums">{formatMinor(q.minor)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div>
-                <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-emerald-400 transition-[width] duration-300" style={{ width: `${afterPct}%` }} />
-                </div>
-                <p className="mt-2 text-center text-xs text-muted-foreground">
-                  {addMinor > 0
-                    ? afterPct >= 100
-                      ? 'This reaches your goal.'
-                      : `This takes you to ${Math.round(afterPct)}%.`
-                    : `You're at ${Math.round(pctOf(goal))}% right now.`}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {view === 'edit' && (
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <Label>Name</Label>
-                <Input className="h-11" value={name} onChange={(e) => setName(e.target.value)} />
-              </div>
-              <MoneyField label="Target amount" value={target} onChange={setTarget} />
-              <div className="grid grid-cols-2 gap-3">
-                <MoneyField label="Saved so far" value={saved} onChange={setSaved} />
-                <MoneyField label="Per month" value={monthly} onChange={setMonthly} />
-              </div>
-              <Button
-                variant="ghost"
-                className={cn('w-full', confirmRemove ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
-                disabled={pending}
-                onClick={() => (confirmRemove ? onRemove(goal.id) : setConfirmRemove(true))}
-              >
-                {confirmRemove ? 'Tap again to remove this goal for good' : 'Remove goal'}
-              </Button>
-            </div>
-          )}
-        </div>
-
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="mx-auto flex w-full max-w-lg gap-2">
-            <Button variant="outline" className="h-12 flex-1" onClick={onClose}>
-              Cancel
-            </Button>
-            {view === 'add' ? (
-              <Button
-                className="h-12 flex-[1.4]"
-                disabled={addMinor <= 0 || pending}
-                onClick={() =>
-                  onSave(
-                    {
-                      id: goal.id,
-                      name: goal.name,
-                      targetMinor: goal.targetMinor,
-                      savedMinor: goal.savedMinor + addMinor,
-                      monthlyContributionMinor: goal.monthlyContributionMinor,
-                    },
-                    goal.savedMinor + addMinor >= goal.targetMinor ? `${goal.name} reached 🎉` : `Added ${formatMinor(addMinor)}`,
-                    onClose,
-                  )
-                }
-              >
-                {pending ? 'Saving…' : addMinor > 0 ? `Add ${formatMinor(addMinor)}` : 'Add money'}
-              </Button>
-            ) : (
-              <Button
-                className="h-12 flex-[1.4]"
-                disabled={!editValid || pending}
-                onClick={() =>
-                  onSave(
-                    {
-                      id: goal.id,
-                      name: name.trim(),
-                      targetMinor: editTarget,
-                      savedMinor: parseMajorToMinor(saved) ?? 0,
-                      monthlyContributionMinor: parseMajorToMinor(monthly) ?? 0,
-                    },
-                    'Changes saved',
-                    onClose,
-                  )
-                }
-              >
-                {pending ? 'Saving…' : 'Save changes'}
-              </Button>
-            )}
-          </div>
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+      <GoalDrawerFooter
+        view={view}
+        addMinor={addMinor}
+        editValid={editValid}
+        pending={pending}
+        addLabel={addLabel}
+        onAdd={() =>
+          onSave(
+            {
+              id: goal.id,
+              name: goal.name,
+              targetMinor: goal.targetMinor,
+              savedMinor: goal.savedMinor + addMinor,
+              monthlyContributionMinor: goal.monthlyContributionMinor,
+            },
+            goal.savedMinor + addMinor >= goal.targetMinor ? `${goal.name} reached 🎉` : `Added ${formatMinor(addMinor)}`,
+            onClose,
+          )
+        }
+        onSave={() =>
+          onSave(
+            {
+              id: goal.id,
+              name: name.trim(),
+              targetMinor: editTarget,
+              savedMinor: parseMajorToMinor(saved) ?? 0,
+              monthlyContributionMinor: parseMajorToMinor(monthly) ?? 0,
+            },
+            'Changes saved',
+            onClose,
+          )
+        }
+        onClose={onClose}
+      />
+    </>
   )
 }

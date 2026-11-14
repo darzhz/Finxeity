@@ -280,26 +280,22 @@ export function ReviewPage() {
   const runBulk = async () => {
     setBulkAsk(false)
     setBulkProgress(0)
-    let done = 0
-    for (const e of likely) {
-      try {
-        await LocalExpense.confirmEvent({
-          id: e.id,
-          amountMinor: e.parsed?.amountMinor ?? undefined,
-          merchantName: e.parsed?.merchant ?? undefined,
-        })
-        setGone((g) => new Set(g).add(e.id))
-        setStats((s) => ({ ...s, confirmed: s.confirmed + 1 }))
-        done++
-        setBulkProgress(done)
-      } catch {
-        toast.error('Stopped early. The rest are still waiting for you.')
-        break
-      }
-    }
-    refresh()
+    const results = await Promise.allSettled(
+      likely.map((event) =>
+        LocalExpense.confirmEvent({
+          id: event.id,
+          amountMinor: event.parsed?.amountMinor ?? undefined,
+          merchantName: event.parsed?.merchant ?? undefined,
+        }),
+      ),
+    )
+    const added = likely.filter((_, index) => results[index].status === 'fulfilled')
+    setGone((current) => new Set([...current, ...added.map((event) => event.id)]))
+    setStats((state) => ({ ...state, confirmed: state.confirmed + added.length }))
     setBulkProgress(null)
-    if (done > 0) toast.success(`Added ${done} ${done === 1 ? 'transaction' : 'transactions'}`)
+    refresh()
+    if (added.length > 0) toast.success(`Added ${added.length} ${added.length === 1 ? 'transaction' : 'transactions'}`)
+    if (added.length < likely.length) toast.error('Some could not be added. The rest are still waiting for you.')
   }
 
   const top = visible[0]
@@ -308,120 +304,43 @@ export function ReviewPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-lg">
-        <header className="sticky top-0 z-20 space-y-3 bg-background/85 px-4 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-xl">
-          <div className="flex items-end justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">Needs review</h1>
-              <p className="text-sm text-muted-foreground">
-                {allDone ? 'Nothing waiting for you.' : left === 1 ? '1 message left' : `${left} messages left`}
-              </p>
-            </div>
-            {total > 0 && !allDone && (
-              <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium tabular-nums">
-                {handled} of {total} done
-              </span>
-            )}
-          </div>
-          {total > 0 && (
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-emerald-400 transition-[width] duration-500" style={{ width: `${(handled / total) * 100}%` }} />
-            </div>
-          )}
-          {!allDone && visible.length > 0 && (
-            <Segmented
-              options={[
-                { key: 'swipe', label: 'Swipe' },
-                { key: 'list', label: 'List' },
-              ]}
-              value={mode}
-              onChange={setMode}
-            />
-          )}
-        </header>
+        <ReviewHeader allDone={allDone} left={left} total={total} handled={handled} mode={mode} onMode={setMode} />
 
         <div className="space-y-5 px-4 pb-10 pt-2">
-          {/* bulk confirm */}
           {likely.length >= 2 && (
-            <div className="flex items-center gap-3 rounded-3xl border border-emerald-500/30 bg-emerald-500/10 p-4">
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-300">
-                <Sparkles className="size-5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{likely.length} look right already</p>
-                <p className="text-xs text-muted-foreground">Add them all in one go, or go through them yourself.</p>
-              </div>
-              <Button
-                size="sm"
-                className="h-9"
-                variant={bulkAsk ? 'default' : 'outline'}
-                disabled={bulkProgress !== null}
-                onClick={() => (bulkAsk ? void runBulk() : setBulkAsk(true))}
-              >
-                {bulkProgress !== null ? `${bulkProgress}/${likely.length + bulkProgress}` : bulkAsk ? 'Tap to confirm' : 'Add all'}
-              </Button>
-            </div>
+            <BulkBanner
+              count={likely.length}
+              ask={bulkAsk}
+              progress={bulkProgress}
+              onAsk={() => setBulkAsk(true)}
+              onRun={() => void runBulk()}
+            />
           )}
 
           {query.isLoading && <Skeleton className="h-96 w-full rounded-3xl" />}
 
           {allDone && <AllCaughtUp stats={stats} />}
 
-          {/* swipe mode */}
           {mode === 'swipe' && top && (
-            <>
-              <div className="relative pb-6">
-                {visible.slice(1, 3).map((e, i) => (
-                  <div
-                    key={e.id}
-                    aria-hidden
-                    className="absolute inset-x-0 top-0 bottom-6 rounded-3xl border border-border bg-card"
-                    style={{
-                      transform: `translateY(${(i + 1) * 10}px) scale(${1 - (i + 1) * 0.05})`,
-                      opacity: 1 - (i + 1) * 0.3,
-                      zIndex: -i - 1,
-                    }}
-                  />
-                ))}
-                <ReviewCard
-                  key={top.id}
-                  event={top}
-                  categories={categoryList.slice(0, 8)}
-                  picked={picked[top.id] ?? null}
-                  onPick={(id) => setPicked((p) => ({ ...p, [top.id]: id }))}
-                  onMore={() => setEditing(top)}
-                  onDecide={(dir) => decide(top, dir)}
-                  flying={flying?.id === top.id ? flying.dir : null}
-                />
-              </div>
-
-              <div className="flex items-center justify-center gap-5">
-                <Button
-                  variant="outline"
-                  className="size-14 rounded-full border-rose-500/40 text-rose-300 hover:bg-rose-500/10"
-                  aria-label="Dismiss"
-                  disabled={!!flying}
-                  onClick={() => decide(top, 'dismiss')}
-                >
-                  <X className="size-6" />
-                </Button>
-                <Button variant="outline" className="size-12 rounded-full" aria-label="Edit details" disabled={!!flying} onClick={() => setEditing(top)}>
-                  <Pencil className="size-5" />
-                </Button>
-                <Button className="size-14 rounded-full bg-emerald-500 text-white hover:bg-emerald-500/90" aria-label="Add as a transaction" disabled={!!flying} onClick={() => decide(top, 'confirm')}>
-                  <Check className="size-6" />
-                </Button>
-              </div>
-              <p className="text-center text-xs text-muted-foreground">Swipe right to add, left to dismiss.</p>
-            </>
+            <SwipeMode
+              top={top}
+              upcoming={visible.slice(1, 3)}
+              categories={categoryList.slice(0, 8)}
+              picked={picked[top.id] ?? null}
+              flying={flying?.id === top.id ? flying.dir : null}
+              onPick={(id) => setPicked((current) => ({ ...current, [top.id]: id }))}
+              onMore={() => setEditing(top)}
+              onDecide={(dir) => decide(top, dir)}
+            />
           )}
 
-          {/* list mode */}
           {mode === 'list' && visible.length > 0 && (
-            <ul className="divide-y divide-border/60 overflow-hidden rounded-3xl border border-border bg-card">
-              {visible.map((e) => (
-                <ListRow key={e.id} event={e} onEdit={() => setEditing(e)} onConfirm={() => decide(e, 'confirm', false)} onDismiss={() => decide(e, 'dismiss', false)} />
-              ))}
-            </ul>
+            <ReviewList
+              events={visible}
+              onEdit={setEditing}
+              onConfirm={(event) => decide(event, 'confirm', false)}
+              onDismiss={(event) => decide(event, 'dismiss', false)}
+            />
           )}
         </div>
       </div>
@@ -432,8 +351,8 @@ export function ReviewPage() {
         initialCategoryId={editing ? (picked[editing.id] ?? null) : null}
         onClose={() => setEditing(null)}
         onDone={(id) => {
-          setGone((g) => new Set(g).add(id))
-          setStats((s) => ({ ...s, confirmed: s.confirmed + 1 }))
+          setGone((current) => new Set(current).add(id))
+          setStats((state) => ({ ...state, confirmed: state.confirmed + 1 }))
           setEditing(null)
         }}
       />
@@ -441,8 +360,255 @@ export function ReviewPage() {
   )
 }
 
+function ReviewHeader({
+  allDone,
+  left,
+  total,
+  handled,
+  mode,
+  onMode,
+}: {
+  allDone: boolean
+  left: number
+  total: number
+  handled: number
+  mode: 'swipe' | 'list'
+  onMode: (mode: 'swipe' | 'list') => void
+}) {
+  const status = allDone ? 'Nothing waiting for you.' : left === 1 ? '1 message left' : `${left} messages left`
+  return (
+    <header className="sticky top-0 z-20 space-y-3 bg-background/85 px-4 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-xl">
+      <div className="flex items-end justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Needs review</h1>
+          <p className="text-sm text-muted-foreground">{status}</p>
+        </div>
+        {total > 0 && !allDone && (
+          <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium tabular-nums">
+            {handled} of {total} done
+          </span>
+        )}
+      </div>
+      {total > 0 && (
+        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-emerald-400 transition-[width] duration-500" style={{ width: `${(handled / total) * 100}%` }} />
+        </div>
+      )}
+      {!allDone && left > 0 && (
+        <Segmented
+          options={[
+            { key: 'swipe', label: 'Swipe' },
+            { key: 'list', label: 'List' },
+          ]}
+          value={mode}
+          onChange={onMode}
+        />
+      )}
+    </header>
+  )
+}
+
+function BulkBanner({
+  count,
+  ask,
+  progress,
+  onAsk,
+  onRun,
+}: {
+  count: number
+  ask: boolean
+  progress: number | null
+  onAsk: () => void
+  onRun: () => void
+}) {
+  const label = progress !== null ? 'Adding…' : ask ? 'Tap to confirm' : 'Add all'
+  return (
+    <div className="flex items-center gap-3 rounded-3xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-300">
+        <Sparkles className="size-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{count} look right already</p>
+        <p className="text-xs text-muted-foreground">Add them all in one go, or go through them yourself.</p>
+      </div>
+      <Button
+        size="sm"
+        className="h-9"
+        variant={ask ? 'default' : 'outline'}
+        disabled={progress !== null}
+        onClick={ask ? onRun : onAsk}
+      >
+        {label}
+      </Button>
+    </div>
+  )
+}
+
+function SwipeMode({
+  top,
+  upcoming,
+  categories,
+  picked,
+  flying,
+  onPick,
+  onMore,
+  onDecide,
+}: {
+  top: RawEvent
+  upcoming: RawEvent[]
+  categories: Category[]
+  picked: string | null
+  flying: Decision | null
+  onPick: (id: string | null) => void
+  onMore: () => void
+  onDecide: (dir: Decision) => void
+}) {
+  return (
+    <>
+      <div className="relative pb-6">
+        {upcoming.map((event, index) => (
+          <div
+            key={event.id}
+            aria-hidden
+            className="absolute inset-x-0 top-0 bottom-6 rounded-3xl border border-border bg-card"
+            style={{
+              transform: `translateY(${(index + 1) * 10}px) scale(${1 - (index + 1) * 0.05})`,
+              opacity: 1 - (index + 1) * 0.3,
+              zIndex: -index - 1,
+            }}
+          />
+        ))}
+        <ReviewCard
+          key={top.id}
+          event={top}
+          categories={categories}
+          picked={picked}
+          onPick={onPick}
+          onMore={onMore}
+          onDecide={onDecide}
+          flying={flying}
+        />
+      </div>
+
+      <div className="flex items-center justify-center gap-5">
+        <Button
+          variant="outline"
+          className="size-14 rounded-full border-rose-500/40 text-rose-300 hover:bg-rose-500/10"
+          aria-label="Dismiss"
+          disabled={!!flying}
+          onClick={() => onDecide('dismiss')}
+        >
+          <X className="size-6" />
+        </Button>
+        <Button variant="outline" className="size-12 rounded-full" aria-label="Edit details" disabled={!!flying} onClick={onMore}>
+          <Pencil className="size-5" />
+        </Button>
+        <Button className="size-14 rounded-full bg-emerald-500 text-white hover:bg-emerald-500/90" aria-label="Add as a transaction" disabled={!!flying} onClick={() => onDecide('confirm')}>
+          <Check className="size-6" />
+        </Button>
+      </div>
+      <p className="text-center text-xs text-muted-foreground">Swipe right to add, left to dismiss.</p>
+    </>
+  )
+}
+
+function ReviewList({
+  events,
+  onEdit,
+  onConfirm,
+  onDismiss,
+}: {
+  events: RawEvent[]
+  onEdit: (event: RawEvent) => void
+  onConfirm: (event: RawEvent) => void
+  onDismiss: (event: RawEvent) => void
+}) {
+  return (
+    <ul className="divide-y divide-border/60 overflow-hidden rounded-3xl border border-border bg-card">
+      {events.map((event) => (
+        <ListRow
+          key={event.id}
+          event={event}
+          onEdit={() => onEdit(event)}
+          onConfirm={() => onConfirm(event)}
+          onDismiss={() => onDismiss(event)}
+        />
+      ))}
+    </ul>
+  )
+}
+
 /* ───────────────────────────── swipe card ─────────────────────────────
    The showy part: drag it, tilt it, and it stamps "Add" or "Dismiss".    */
+
+function cardTransform(dx: number, flying: Decision | null) {
+  if (flying) {
+    return `translateX(${flying === 'confirm' ? 560 : -560}px) rotate(${flying === 'confirm' ? 22 : -22}deg)`
+  }
+  return `translateX(${dx}px) rotate(${dx / 18}deg)`
+}
+
+function SwipeStamps({ dx, progress }: { dx: number; progress: number }) {
+  return (
+    <>
+      <span
+        className="pointer-events-none absolute left-5 top-5 -rotate-12 rounded-xl border-2 border-emerald-400 px-3 py-1 text-lg font-bold text-emerald-300"
+        style={{ opacity: dx > 0 ? progress : 0 }}
+      >
+        Add
+      </span>
+      <span
+        className="pointer-events-none absolute right-5 top-5 rotate-12 rounded-xl border-2 border-rose-400 px-3 py-1 text-lg font-bold text-rose-300"
+        style={{ opacity: dx < 0 ? progress : 0 }}
+      >
+        Dismiss
+      </span>
+    </>
+  )
+}
+
+function ConfidenceMeter({ confidence }: { confidence: number }) {
+  const info = confidenceInfo(confidence)
+  return (
+    <div className="mx-auto mt-3 flex w-40 flex-col items-center gap-1">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div className={cn('h-full rounded-full transition-[width] duration-500', info.bar)} style={{ width: `${Math.max(6, confidence * 100)}%` }} />
+      </div>
+      <span className={cn('text-xs font-medium', info.text)}>
+        {info.word}, {Math.round(confidence * 100)}%
+      </span>
+    </div>
+  )
+}
+
+function ParsedSummary({ event, credit, amount }: { event: RawEvent; credit: boolean; amount: number | null | undefined }) {
+  return (
+    <div className="mt-4 text-center">
+      <p className={cn('font-display text-5xl font-bold tracking-tight tabular-nums', amount == null && 'text-muted-foreground/50')}>
+        {amount != null ? (
+          <>
+            <span className={credit ? 'text-emerald-400' : 'text-foreground'}>{credit ? '+' : ''}</span>
+            {formatMinor(amount)}
+          </>
+        ) : (
+          'No amount'
+        )}
+      </p>
+      <p className="mt-2 text-sm text-muted-foreground">
+        {credit ? 'Income' : 'Spend'}
+        {event.parsed?.merchant ? (
+          <>
+            {credit ? ' from ' : ' at '}
+            <span className="font-medium text-foreground">{event.parsed.merchant}</span>
+          </>
+        ) : (
+          ', merchant unknown'
+        )}
+      </p>
+      <ConfidenceMeter confidence={confidenceOf(event)} />
+    </div>
+  )
+}
 
 function ReviewCard({
   event,
@@ -467,14 +633,9 @@ function ReviewCard({
   const crossed = useRef(false)
 
   const credit = event.parsed?.direction === 'CREDIT'
-  const conf = confidenceOf(event)
-  const info = confidenceInfo(conf)
   const amount = event.parsed?.amountMinor
   const progress = Math.min(1, Math.abs(dx) / SWIPE_THRESHOLD)
-
-  const transform = flying
-    ? `translateX(${flying === 'confirm' ? 560 : -560}px) rotate(${flying === 'confirm' ? 22 : -22}deg)`
-    : `translateX(${dx}px) rotate(${dx / 18}deg)`
+  const transform = cardTransform(dx, flying)
 
   return (
     <article
@@ -514,57 +675,14 @@ function ReviewCard({
         setDx(0)
       }}
     >
-      {/* stamps */}
-      <span
-        className="pointer-events-none absolute left-5 top-5 -rotate-12 rounded-xl border-2 border-emerald-400 px-3 py-1 text-lg font-bold text-emerald-300"
-        style={{ opacity: dx > 0 ? progress : 0 }}
-      >
-        Add
-      </span>
-      <span
-        className="pointer-events-none absolute right-5 top-5 rotate-12 rounded-xl border-2 border-rose-400 px-3 py-1 text-lg font-bold text-rose-300"
-        style={{ opacity: dx < 0 ? progress : 0 }}
-      >
-        Dismiss
-      </span>
+      <SwipeStamps dx={dx} progress={progress} />
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span className="truncate font-medium text-foreground">{sourceOf(event)}</span>
         <span className="shrink-0">{formatRelativeTime(event.postedAt)}</span>
       </div>
 
-      {/* what the parser understood */}
-      <div className="mt-4 text-center">
-        <p className={cn('font-display text-5xl font-bold tracking-tight tabular-nums', amount == null && 'text-muted-foreground/50')}>
-          {amount != null ? (
-            <>
-              <span className={credit ? 'text-emerald-400' : 'text-foreground'}>{credit ? '+' : ''}</span>
-              {formatMinor(amount)}
-            </>
-          ) : (
-            'No amount'
-          )}
-        </p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {credit ? 'Income' : 'Spend'}
-          {event.parsed?.merchant ? (
-            <>
-              {credit ? ' from ' : ' at '}
-              <span className="font-medium text-foreground">{event.parsed.merchant}</span>
-            </>
-          ) : (
-            ', merchant unknown'
-          )}
-        </p>
-        <div className="mx-auto mt-3 flex w-40 flex-col items-center gap-1">
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-            <div className={cn('h-full rounded-full transition-[width] duration-500', info.bar)} style={{ width: `${Math.max(6, conf * 100)}%` }} />
-          </div>
-          <span className={cn('text-xs font-medium', info.text)}>
-            {info.word}, {Math.round(conf * 100)}%
-          </span>
-        </div>
-      </div>
+      <ParsedSummary event={event} credit={credit} amount={amount} />
 
       {/* the original message */}
       <div className="mt-5 rounded-2xl bg-muted/60 p-3.5">
@@ -669,26 +787,57 @@ function ReviewDrawer({
   onClose: () => void
   onDone: (id: string) => void
 }) {
-  const client = useQueryClient()
-  const [amount, setAmount] = useState('')
-  const [merchant, setMerchant] = useState('')
-  const [categoryId, setCategoryId] = useState<string | null>(null)
+  if (!event) {
+    return (
+      <Drawer open={false} onOpenChange={() => {}}>
+        <DrawerContent />
+      </Drawer>
+    )
+  }
 
-  useEffect(() => {
-    if (!event) return
-    setAmount(event.parsed?.amountMinor != null ? (event.parsed.amountMinor / 100).toFixed(2) : '')
-    setMerchant(event.parsed?.merchant ?? '')
-    setCategoryId(initialCategoryId)
-  }, [event?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
+      <DrawerContent className="max-h-[92dvh]">
+        <ReviewDrawerBody
+          key={event.id}
+          event={event}
+          categories={categories}
+          initialCategoryId={initialCategoryId}
+          onClose={onClose}
+          onDone={onDone}
+        />
+      </DrawerContent>
+    </Drawer>
+  )
+}
+
+function ReviewDrawerBody({
+  event,
+  categories,
+  initialCategoryId,
+  onClose,
+  onDone,
+}: {
+  event: RawEvent
+  categories: Category[]
+  initialCategoryId: string | null
+  onClose: () => void
+  onDone: (id: string) => void
+}) {
+  const client = useQueryClient()
+  const [amount, setAmount] = useState(() => (event.parsed?.amountMinor != null ? (event.parsed.amountMinor / 100).toFixed(2) : ''))
+  const [merchant, setMerchant] = useState(() => event.parsed?.merchant ?? '')
+  const [categoryId, setCategoryId] = useState<string | null>(initialCategoryId)
 
   const minor = parseMajorToMinor(amount) ?? 0
-  const credit = event?.parsed?.direction === 'CREDIT'
+  const credit = event.parsed?.direction === 'CREDIT'
+  const parsedAmount = event.parsed?.amountMinor
 
   const confirm = useMutation({
     mutationFn: () =>
       LocalExpense.confirmEvent({
-        id: event!.id,
-        amountMinor: minor || (event!.parsed?.amountMinor ?? undefined),
+        id: event.id,
+        amountMinor: minor || (parsedAmount ?? undefined),
         merchantName: merchant.trim() || undefined,
         categoryId: categoryId ?? undefined,
       }),
@@ -697,58 +846,54 @@ function ReviewDrawer({
       void client.invalidateQueries({ queryKey: ['transactions'] })
       void client.invalidateQueries({ queryKey: queryKeys.ingestionStats })
       toast.success('Added as a transaction')
-      onDone(event!.id)
+      onDone(event.id)
     },
     onError: () => toast.error('Could not add this one. Try again.'),
   })
 
   return (
-    <Drawer open={event !== null} onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="pb-2">
-          <DrawerTitle>Check the details</DrawerTitle>
-          <DrawerDescription>Fix anything the app got wrong, then add it.</DrawerDescription>
-        </DrawerHeader>
+    <>
+      <DrawerHeader className="pb-2">
+        <DrawerTitle>Check the details</DrawerTitle>
+        <DrawerDescription>Fix anything the app got wrong, then add it.</DrawerDescription>
+      </DrawerHeader>
 
-        <div className="space-y-5 overflow-y-auto px-4 pb-2">
-          {event && (
-            <div className="rounded-2xl bg-muted/60 p-3.5 text-sm leading-relaxed">
-              <Highlighted text={messageOf(event)} merchant={merchant || event.parsed?.merchant} />
-            </div>
-          )}
-
-          <div className="flex items-baseline justify-center gap-1.5">
-            <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
-            <input
-              inputMode="decimal"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))}
-              placeholder="0"
-              aria-label="Amount"
-              className={cn('w-48 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40', credit && 'text-emerald-400')}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Merchant</Label>
-            <Input className="h-11" value={merchant} placeholder="Unknown merchant" onChange={(e) => setMerchant(e.target.value)} />
-          </div>
-
-          <div className="space-y-2">
-            <Label>Category</Label>
-            <CategoryChips categories={categories} value={categoryId} onChange={setCategoryId} wrap />
-          </div>
+      <div className="space-y-5 overflow-y-auto px-4 pb-2">
+        <div className="rounded-2xl bg-muted/60 p-3.5 text-sm leading-relaxed">
+          <Highlighted text={messageOf(event)} merchant={merchant || event.parsed?.merchant} />
         </div>
 
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <Button className="h-12 text-base" onClick={() => confirm.mutate()} disabled={confirm.isPending || (minor <= 0 && !event?.parsed?.amountMinor)}>
-            {confirm.isPending ? 'Adding…' : 'Add transaction'}
-          </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+        <div className="flex items-baseline justify-center gap-1.5">
+          <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
+          <input
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))}
+            placeholder="0"
+            aria-label="Amount"
+            className={cn('w-48 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40', credit && 'text-emerald-400')}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Merchant</Label>
+          <Input className="h-11" value={merchant} placeholder="Unknown merchant" onChange={(e) => setMerchant(e.target.value)} />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Category</Label>
+          <CategoryChips categories={categories} value={categoryId} onChange={setCategoryId} wrap />
+        </div>
+      </div>
+
+      <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <Button className="h-12 text-base" onClick={() => confirm.mutate()} disabled={confirm.isPending || (minor <= 0 && !parsedAmount)}>
+          {confirm.isPending ? 'Adding…' : 'Add transaction'}
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </DrawerFooter>
+    </>
   )
 }

@@ -445,8 +445,10 @@ function CategoryWheel({
   const hoverRef = useRef<string | null>(null)
   const pick = useRef(onPick)
   const close = useRef(onClose)
-  pick.current = onPick
-  close.current = onClose
+  useEffect(() => {
+    pick.current = onPick
+    close.current = onClose
+  }, [onPick, onClose])
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -617,7 +619,6 @@ function AddDrawer({
           <div className="flex items-baseline justify-center gap-1.5 py-2">
             <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
             <input
-              autoFocus
               inputMode="decimal"
               value={amount}
               onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))}
@@ -681,6 +682,24 @@ type Draft = {
   categoryId: string | null
 }
 
+function draftFrom(transaction: Transaction): Draft {
+  return {
+    amount: (transaction.amountMinor / 100).toFixed(2),
+    merchant: transaction.merchantName ?? '',
+    note: transaction.note ?? '',
+    categoryId: transaction.categoryId,
+  }
+}
+
+function isDraftDirty(draft: Draft, transaction: Transaction) {
+  return (
+    parseMajorToMinor(draft.amount) !== transaction.amountMinor ||
+    draft.merchant !== (transaction.merchantName ?? '') ||
+    draft.note !== (transaction.note ?? '') ||
+    draft.categoryId !== transaction.categoryId
+  )
+}
+
 function EditDrawer({
   transaction,
   categories,
@@ -690,40 +709,54 @@ function EditDrawer({
   categories: Category[]
   onClose: () => void
 }) {
+  if (!transaction) {
+    return (
+      <Drawer open={false} onOpenChange={() => {}}>
+        <DrawerContent />
+      </Drawer>
+    )
+  }
+
+  return (
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
+      <DrawerContent className="max-h-[92dvh]">
+        <EditDrawerBody key={transaction.id} transaction={transaction} categories={categories} onClose={onClose} />
+      </DrawerContent>
+    </Drawer>
+  )
+}
+
+function EditDrawerBody({
+  transaction,
+  categories,
+  onClose,
+}: {
+  transaction: Transaction
+  categories: Category[]
+  onClose: () => void
+}) {
   const client = useQueryClient()
-  const [draft, setDraft] = useState<Draft | null>(null)
+  const [draft, setDraft] = useState<Draft>(() => draftFrom(transaction))
   const [view, setView] = useState<'details' | 'source'>('details')
 
-  // Rebuild the draft whenever a different transaction is opened.
-  useEffect(() => {
-    if (!transaction) return
-    setView('details')
-    setDraft({
-      amount: (transaction.amountMinor / 100).toFixed(2),
-      merchant: transaction.merchantName ?? '',
-      note: transaction.note ?? '',
-      categoryId: transaction.categoryId,
-    })
-  }, [transaction?.id]) // eslint-disable-line react-hooks/exhaustive-deps
-
   const rawEvent = useQuery({
-    queryKey: ['rawEventForTxn', transaction?.id],
+    queryKey: ['rawEventForTxn', transaction.id],
     queryFn: async () => {
-      if (!transaction?.rawEventId) return null
+      if (!transaction.rawEventId) return null
       const page = await LocalExpense.listRawEvents({ limit: 200 })
-      return page.items.find((e) => e.id === transaction.rawEventId) ?? null
+      return page.items.find((event) => event.id === transaction.rawEventId) ?? null
     },
-    enabled: !!transaction && view === 'source',
+    enabled: view === 'source',
   })
 
   const save = useMutation({
     mutationFn: () =>
       LocalExpense.correctTransaction({
-        id: transaction!.id,
-        amountMinor: parseMajorToMinor(draft?.amount ?? '') ?? transaction!.amountMinor,
-        categoryId: draft?.categoryId ?? undefined,
-        merchantName: draft?.merchant.trim() || undefined,
-        note: draft?.note.trim() || undefined,
+        id: transaction.id,
+        amountMinor: parseMajorToMinor(draft.amount) ?? transaction.amountMinor,
+        categoryId: draft.categoryId ?? undefined,
+        merchantName: draft.merchant.trim() || undefined,
+        note: draft.note.trim() || undefined,
       }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['transactions'] })
@@ -733,143 +766,287 @@ function EditDrawer({
     onError: () => toast.error('Could not save your changes. Try again.'),
   })
 
-  const dirty =
-    !!transaction &&
-    !!draft &&
-    (parseMajorToMinor(draft.amount) !== transaction.amountMinor ||
-      draft.merchant !== (transaction.merchantName ?? '') ||
-      draft.note !== (transaction.note ?? '') ||
-      draft.categoryId !== transaction.categoryId)
-
-  const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d))
-  const isCredit = transaction?.direction === 'CREDIT'
-  const selectedName = categories.find((c) => c.id === draft?.categoryId)?.name
+  const patch = (next: Partial<Draft>) => setDraft((current) => ({ ...current, ...next }))
+  const isCredit = transaction.direction === 'CREDIT'
+  const selectedName = categories.find((category) => category.id === draft.categoryId)?.name
+  const dirty = isDraftDirty(draft, transaction)
 
   return (
-    <Drawer open={transaction !== null} onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="items-center pb-2 text-center">
-          <div
-            className={cn(
-              'flex size-14 items-center justify-center rounded-2xl text-3xl transition-colors',
-              categoryMeta(selectedName).tint,
-            )}
-          >
-            {categoryMeta(selectedName).emoji}
-          </div>
-          <DrawerTitle className="mt-2">{transaction?.merchantName ?? 'Unknown merchant'}</DrawerTitle>
-          <DrawerDescription>
-            {transaction && (
-              <span className={cn('font-semibold tabular-nums', isCredit ? 'text-emerald-400' : 'text-foreground')}>
-                {isCredit ? '+' : '−'}
-                {formatMinor(transaction.amountMinor)}
-              </span>
-            )}
-            {transaction && <span className="ml-2">{formatDateTime(transaction.occurredAt)}</span>}
-          </DrawerDescription>
-        </DrawerHeader>
+    <>
+      <EditHeader transaction={transaction} isCredit={isCredit} selectedName={selectedName} />
 
-        <div className="space-y-4 overflow-y-auto px-4 pb-2">
-          <Segmented
-            options={[
-              { key: 'details', label: 'Details' },
-              { key: 'source', label: 'Source message' },
-            ]}
-            value={view}
-            onChange={setView}
+      <div className="space-y-4 overflow-y-auto px-4 pb-2">
+        <Segmented
+          options={[
+            { key: 'details', label: 'Details' },
+            { key: 'source', label: 'Source message' },
+          ]}
+          value={view}
+          onChange={setView}
+        />
+
+        {view === 'details' && <EditDetailsPanel draft={draft} categories={categories} patch={patch} />}
+        {view === 'source' && <EditSourcePanel rawEvent={rawEvent} />}
+      </div>
+
+      <EditFooter pending={save.isPending} dirty={dirty} onSave={() => save.mutate()} onClose={onClose} />
+    </>
+  )
+}
+
+function EditHeader({
+  transaction,
+  isCredit,
+  selectedName,
+}: {
+  transaction: Transaction
+  isCredit: boolean
+  selectedName: string | undefined
+}) {
+  return (
+    <DrawerHeader className="items-center pb-2 text-center">
+      <div className={cn('flex size-14 items-center justify-center rounded-2xl text-3xl transition-colors', categoryMeta(selectedName).tint)}>
+        {categoryMeta(selectedName).emoji}
+      </div>
+      <DrawerTitle className="mt-2">{transaction.merchantName ?? 'Unknown merchant'}</DrawerTitle>
+      <DrawerDescription>
+        <span className={cn('font-semibold tabular-nums', isCredit ? 'text-emerald-400' : 'text-foreground')}>
+          {isCredit ? '+' : '−'}
+          {formatMinor(transaction.amountMinor)}
+        </span>
+        <span className="ml-2">{formatDateTime(transaction.occurredAt)}</span>
+      </DrawerDescription>
+    </DrawerHeader>
+  )
+}
+
+function EditDetailsPanel({
+  draft,
+  categories,
+  patch,
+}: {
+  draft: Draft
+  categories: Category[]
+  patch: (next: Partial<Draft>) => void
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Amount</Label>
+          <Input
+            className="h-11 tabular-nums"
+            inputMode="decimal"
+            value={draft.amount}
+            onChange={(e) => patch({ amount: e.target.value.replace(/[^\d.]/g, '') })}
           />
-
-          {view === 'details' && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Amount</Label>
-                  <Input
-                    className="h-11 tabular-nums"
-                    inputMode="decimal"
-                    value={draft?.amount ?? ''}
-                    onChange={(e) => patch({ amount: e.target.value.replace(/[^\d.]/g, '') })}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Merchant</Label>
-                  <Input
-                    className="h-11"
-                    value={draft?.merchant ?? ''}
-                    placeholder="Unknown merchant"
-                    onChange={(e) => patch({ merchant: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Category</Label>
-                <CategoryPicker
-                  categories={categories}
-                  value={draft?.categoryId ?? null}
-                  onChange={(id) => patch({ categoryId: id })}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Note</Label>
-                <Input
-                  className="h-11"
-                  value={draft?.note ?? ''}
-                  placeholder="What was this for?"
-                  onChange={(e) => patch({ note: e.target.value })}
-                />
-              </div>
-            </div>
-          )}
-
-          {view === 'source' && (
-            <div className="space-y-2 text-sm">
-              {rawEvent.isLoading && <Skeleton className="h-32 w-full rounded-2xl" />}
-              {!rawEvent.isLoading && !rawEvent.data && (
-                <p className="rounded-2xl border border-dashed border-border p-6 text-center text-muted-foreground">
-                  This one was added by hand, so there is no source message.
-                </p>
-              )}
-              {rawEvent.data && (
-                <>
-                  <div className="rounded-2xl border border-border bg-muted/40 p-3.5">
-                    <p className="text-xs text-muted-foreground">
-                      From {rawEvent.data.sender ?? rawEvent.data.packageName ?? 'unknown sender'}
-                    </p>
-                    <p className="mt-1 font-medium">{rawEvent.data.title ?? '—'}</p>
-                    <p className="mt-2 whitespace-pre-wrap text-muted-foreground">
-                      {rawEvent.data.bigText ?? rawEvent.data.text ?? rawEvent.data.textLines ?? '—'}
-                    </p>
-                  </div>
-                  <div className="flex justify-between rounded-2xl border border-border bg-muted/40 p-3.5 text-xs">
-                    <span className="text-muted-foreground">
-                      Received {new Date(rawEvent.data.postedAt).toLocaleString()}
-                    </span>
-                    <span className="font-medium">{rawEvent.data.status}</span>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
         </div>
+        <div className="space-y-1.5">
+          <Label>Merchant</Label>
+          <Input className="h-11" value={draft.merchant} placeholder="Unknown merchant" onChange={(e) => patch({ merchant: e.target.value })} />
+        </div>
+      </div>
 
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="mx-auto flex w-full max-w-lg gap-2">
-            <Button variant="outline" className="h-12 flex-1" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              className="h-12 flex-[1.4]"
-              onClick={() => save.mutate()}
-              disabled={save.isPending || !dirty}
-            >
-              {save.isPending ? 'Saving…' : 'Save changes'}
-            </Button>
+      <div className="space-y-2">
+        <Label>Category</Label>
+        <CategoryPicker categories={categories} value={draft.categoryId} onChange={(id) => patch({ categoryId: id })} />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Note</Label>
+        <Input className="h-11" value={draft.note} placeholder="What was this for?" onChange={(e) => patch({ note: e.target.value })} />
+      </div>
+    </div>
+  )
+}
+
+function EditSourcePanel({ rawEvent }: { rawEvent: ReturnType<typeof useQuery<Awaited<ReturnType<typeof LocalExpense.listRawEvents>>['items'][number] | null>> }) {
+  return (
+    <div className="space-y-2 text-sm">
+      {rawEvent.isLoading && <Skeleton className="h-32 w-full rounded-2xl" />}
+      {!rawEvent.isLoading && !rawEvent.data && (
+        <p className="rounded-2xl border border-dashed border-border p-6 text-center text-muted-foreground">
+          This one was added by hand, so there is no source message.
+        </p>
+      )}
+      {rawEvent.data && (
+        <>
+          <div className="rounded-2xl border border-border bg-muted/40 p-3.5">
+            <p className="text-xs text-muted-foreground">
+              From {rawEvent.data.sender ?? rawEvent.data.packageName ?? 'unknown sender'}
+            </p>
+            <p className="mt-1 font-medium">{rawEvent.data.title ?? '—'}</p>
+            <p className="mt-2 whitespace-pre-wrap text-muted-foreground">
+              {rawEvent.data.bigText ?? rawEvent.data.text ?? rawEvent.data.textLines ?? '—'}
+            </p>
           </div>
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+          <div className="flex justify-between rounded-2xl border border-border bg-muted/40 p-3.5 text-xs">
+            <span className="text-muted-foreground">Received {new Date(rawEvent.data.postedAt).toLocaleString()}</span>
+            <span className="font-medium">{rawEvent.data.status}</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function EditFooter({
+  pending,
+  dirty,
+  onSave,
+  onClose,
+}: {
+  pending: boolean
+  dirty: boolean
+  onSave: () => void
+  onClose: () => void
+}) {
+  return (
+    <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="mx-auto flex w-full max-w-lg gap-2">
+        <Button variant="outline" className="h-12 flex-1" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button className="h-12 flex-[1.4]" onClick={onSave} disabled={pending || !dirty}>
+          {pending ? 'Saving…' : 'Save changes'}
+        </Button>
+      </div>
+    </DrawerFooter>
+  )
+}
+
+type RangeOption = (typeof ranges)[number]
+type Group = { label: string; items: Transaction[]; net: number }
+
+function TransactionFilters({
+  ranges: rangeOptions,
+  range,
+  onRange,
+  categoryList,
+  categoryId,
+  onCategory,
+  accountList,
+  accountId,
+  onAccount,
+}: {
+  ranges: readonly RangeOption[]
+  range: RangeKey
+  onRange: (range: RangeKey) => void
+  categoryList: Category[]
+  categoryId: string | null
+  onCategory: (id: string | null) => void
+  accountList: { id: string; name: string }[]
+  accountId: string | null
+  onAccount: (id: string | null) => void
+}) {
+  return (
+    <div className="-mx-4 space-y-2">
+      <div className={cn('flex gap-2 overflow-x-auto px-4', hideScrollbar)}>
+        {rangeOptions.map((option) => (
+          <Chip key={option.key} active={range === option.key} onClick={() => onRange(option.key)}>
+            {option.label}
+          </Chip>
+        ))}
+      </div>
+      <div className={cn('flex gap-2 overflow-x-auto px-4', hideScrollbar)}>
+        <Chip active={categoryId === null} onClick={() => onCategory(null)}>
+          All categories
+        </Chip>
+        {categoryList.map((category) => (
+          <Chip key={category.id} active={categoryId === category.id} onClick={() => onCategory(categoryId === category.id ? null : category.id)}>
+            <span>{categoryMeta(category.name).emoji}</span>
+            {category.name}
+          </Chip>
+        ))}
+      </div>
+      {accountList.length > 1 && (
+        <div className={cn('flex gap-2 overflow-x-auto px-4', hideScrollbar)}>
+          <Chip active={accountId === null} onClick={() => onAccount(null)}>
+            All accounts
+          </Chip>
+          {accountList.map((account) => (
+            <Chip key={account.id} active={accountId === account.id} onClick={() => onAccount(accountId === account.id ? null : account.id)}>
+              {account.name}
+            </Chip>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TransactionEmptyState({
+  hasFilters,
+  onClear,
+  onAdd,
+}: {
+  hasFilters: boolean
+  onClear: () => void
+  onAdd: () => void
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-3xl border border-dashed border-border px-6 py-12 text-center">
+      <div className="flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+        <Inbox className="size-6" />
+      </div>
+      {hasFilters ? (
+        <>
+          <div>
+            <p className="font-medium">No matches</p>
+            <p className="mt-1 text-sm text-muted-foreground">Try widening the date range or clearing a filter.</p>
+          </div>
+          <Button variant="outline" onClick={onClear}>
+            Clear filters
+          </Button>
+        </>
+      ) : (
+        <>
+          <div>
+            <p className="font-medium">Nothing here yet</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Spending and income appear as bank notifications arrive, or add one yourself.
+            </p>
+          </div>
+          <Button onClick={onAdd}>Add a transaction</Button>
+        </>
+      )}
+    </div>
+  )
+}
+
+function TransactionGroups({
+  groups,
+  onOpen,
+  onLongPress,
+}: {
+  groups: Group[]
+  onOpen: (transaction: Transaction) => void
+  onLongPress: (x: number, y: number, transaction: Transaction) => void
+}) {
+  return (
+    <>
+      {groups.map((group) => (
+        <section key={group.label}>
+          <div className="sticky top-[calc(8.25rem+env(safe-area-inset-top))] z-10 -mx-4 flex items-baseline justify-between bg-background/85 px-6 py-1.5 backdrop-blur-md">
+            <h2 className="text-sm font-semibold">{group.label}</h2>
+            <span className={cn('text-xs tabular-nums', group.net > 0 ? 'text-emerald-400' : 'text-muted-foreground')}>
+              {group.net > 0 ? '+' : group.net < 0 ? '−' : ''}
+              {formatMinor(Math.abs(group.net))}
+            </span>
+          </div>
+          <div className="divide-y divide-border/50">
+            {group.items.map((transaction) => (
+              <TransactionItem
+                key={transaction.id}
+                transaction={transaction}
+                onOpen={() => onOpen(transaction)}
+                onLongPress={(x, y) => onLongPress(x, y, transaction)}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </>
   )
 }
 
@@ -1033,39 +1210,17 @@ export function TransactionsPage() {
 
           <Segmented options={tabs} value={tab} onChange={setTab} />
 
-          {/* filters */}
-          <div className="-mx-4 space-y-2">
-            <div className={cn('flex gap-2 overflow-x-auto px-4', hideScrollbar)}>
-              {ranges.map((r) => (
-                <Chip key={r.key} active={range === r.key} onClick={() => setRange(r.key)}>
-                  {r.label}
-                </Chip>
-              ))}
-            </div>
-            <div className={cn('flex gap-2 overflow-x-auto px-4', hideScrollbar)}>
-              <Chip active={categoryId === null} onClick={() => setCategoryId(null)}>
-                All categories
-              </Chip>
-              {categoryList.map((c) => (
-                <Chip key={c.id} active={categoryId === c.id} onClick={() => setCategoryId(categoryId === c.id ? null : c.id)}>
-                  <span>{categoryMeta(c.name).emoji}</span>
-                  {c.name}
-                </Chip>
-              ))}
-            </div>
-            {accountList.length > 1 && (
-              <div className={cn('flex gap-2 overflow-x-auto px-4', hideScrollbar)}>
-                <Chip active={accountId === null} onClick={() => setAccountId(null)}>
-                  All accounts
-                </Chip>
-                {accountList.map((a) => (
-                  <Chip key={a.id} active={accountId === a.id} onClick={() => setAccountId(accountId === a.id ? null : a.id)}>
-                    {a.name}
-                  </Chip>
-                ))}
-              </div>
-            )}
-          </div>
+          <TransactionFilters
+            ranges={ranges}
+            range={range}
+            onRange={setRange}
+            categoryList={categoryList}
+            categoryId={categoryId}
+            onCategory={setCategoryId}
+            accountList={accountList}
+            accountId={accountId}
+            onAccount={setAccountId}
+          />
 
           {/* list */}
           {query.isLoading && (
@@ -1084,60 +1239,10 @@ export function TransactionsPage() {
           )}
 
           {!query.isLoading && transactions.length === 0 && (
-            <div className="flex flex-col items-center gap-3 rounded-3xl border border-dashed border-border px-6 py-12 text-center">
-              <div className="flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-                <Inbox className="size-6" />
-              </div>
-              {hasFilters ? (
-                <>
-                  <div>
-                    <p className="font-medium">No matches</p>
-                    <p className="mt-1 text-sm text-muted-foreground">Try widening the date range or clearing a filter.</p>
-                  </div>
-                  <Button variant="outline" onClick={clearFilters}>
-                    Clear filters
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <p className="font-medium">Nothing here yet</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Spending and income appear as bank notifications arrive, or add one yourself.
-                    </p>
-                  </div>
-                  <Button onClick={() => setAdding(true)}>Add a transaction</Button>
-                </>
-              )}
-            </div>
+            <TransactionEmptyState hasFilters={hasFilters} onClear={clearFilters} onAdd={() => setAdding(true)} />
           )}
 
-          {groups.map((group) => (
-            <section key={group.label}>
-              <div className="sticky top-[calc(8.25rem+env(safe-area-inset-top))] z-10 -mx-4 flex items-baseline justify-between bg-background/85 px-6 py-1.5 backdrop-blur-md">
-                <h2 className="text-sm font-semibold">{group.label}</h2>
-                <span
-                  className={cn(
-                    'text-xs tabular-nums',
-                    group.net > 0 ? 'text-emerald-400' : 'text-muted-foreground',
-                  )}
-                >
-                  {group.net > 0 ? '+' : group.net < 0 ? '−' : ''}
-                  {formatMinor(Math.abs(group.net))}
-                </span>
-              </div>
-              <div className="divide-y divide-border/50">
-                {group.items.map((t) => (
-                  <TransactionItem
-                    key={t.id}
-                    transaction={t}
-                    onOpen={() => setEditing(t)}
-                    onLongPress={(x, y) => setWheel({ x, y, transaction: t })}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
+          <TransactionGroups groups={groups} onOpen={setEditing} onLongPress={(x, y, transaction) => setWheel({ x, y, transaction })} />
 
           <div ref={sentinel} className="h-1" />
           {query.isFetchingNextPage && <Skeleton className="h-14 w-full rounded-2xl" />}

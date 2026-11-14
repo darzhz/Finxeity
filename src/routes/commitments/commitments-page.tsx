@@ -375,7 +375,144 @@ function EmptyState({ onPick }: { onPick: (name: string) => void }) {
 
 /* ───────────────────────────── add / edit drawer ───────────────────────────── */
 
-function BillDrawer({
+function billDrawerKey(state: { bill: Commitment | null; name?: string } | null) {
+  if (!state) return 'closed'
+  return state.bill ? `edit:${state.bill.id}` : `new:${state.name ?? ''}`
+}
+
+function billDrawerCopy(bill: Commitment | null) {
+  if (!bill) {
+    return { title: 'Add a bill', description: 'What do you owe, how much, and when?', save: 'Add bill' }
+  }
+  return { title: 'Edit bill', description: 'Change anything, or remove it below.', save: 'Save changes' }
+}
+
+function BillNameField({
+  name,
+  onChange,
+  showSuggestions,
+}: {
+  name: string
+  onChange: (value: string) => void
+  showSuggestions: boolean
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="bill-name">Name</Label>
+      <Input id="bill-name" className="h-11" value={name} placeholder="Apartment rent" onChange={(e) => onChange(e.target.value)} />
+      {showSuggestions && (
+        <div className="flex flex-wrap gap-2">
+          {SUGGESTIONS.map((suggestion) => (
+            <button
+              key={suggestion}
+              type="button"
+              onClick={() => onChange(suggestion)}
+              className={cn(
+                'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs',
+                name === suggestion ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200' : 'border-border bg-card text-muted-foreground',
+              )}
+            >
+              {billMeta(suggestion).emoji} {suggestion}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BillDueField({
+  due,
+  dueAt,
+  quickDates,
+  onChange,
+}: {
+  due: string
+  dueAt: number | null
+  quickDates: { label: string; value: string }[]
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="bill-due">Due date</Label>
+      <div className="flex flex-wrap gap-2">
+        {quickDates.map((quick) => (
+          <button
+            key={quick.label}
+            type="button"
+            onClick={() => onChange(quick.value)}
+            className={cn(
+              'inline-flex h-8 items-center rounded-full border px-3 text-xs',
+              due === quick.value ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200' : 'border-border bg-card text-muted-foreground',
+            )}
+          >
+            {quick.label}
+          </button>
+        ))}
+      </div>
+      <Input id="bill-due" type="date" className="h-11" value={due} onChange={(e) => onChange(e.target.value)} />
+      {dueAt != null && (
+        <p className="text-xs text-muted-foreground">
+          {longDate(dueAt)}, {dueInfo(dueAt).text.toLowerCase()}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function BillRecurrenceField({
+  recurrence,
+  dueAt,
+  onChange,
+}: {
+  recurrence: Recurrence
+  dueAt: number | null
+  onChange: (value: Recurrence) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <Label>Repeats</Label>
+      <Segmented
+        options={[
+          { key: 'NONE', label: 'Just once' },
+          { key: 'MONTHLY', label: 'Every month' },
+        ]}
+        value={recurrence}
+        onChange={onChange}
+      />
+      {recurrence === 'MONTHLY' && dueAt != null && (
+        <p className="text-xs text-muted-foreground">Repeats on the {ordinal(new Date(dueAt).getDate())} of each month.</p>
+      )}
+    </div>
+  )
+}
+
+function BillDrawerFooter({
+  valid,
+  pending,
+  saveLabel,
+  onSave,
+  onClose,
+}: {
+  valid: boolean
+  pending: boolean
+  saveLabel: string
+  onSave: () => void
+  onClose: () => void
+}) {
+  return (
+    <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <Button className="h-12 text-base" disabled={!valid || pending} onClick={onSave}>
+        {pending ? 'Saving…' : saveLabel}
+      </Button>
+      <Button variant="ghost" onClick={onClose}>
+        Cancel
+      </Button>
+    </DrawerFooter>
+  )
+}
+
+function BillDrawerBody({
   state,
   onClose,
   onSave,
@@ -389,27 +526,14 @@ function BillDrawer({
   pending: boolean
 }) {
   const bill = state?.bill ?? null
-  const [name, setName] = useState('')
-  const [amount, setAmount] = useState('')
-  const [due, setDue] = useState('')
-  const [recurrence, setRecurrence] = useState<Recurrence>('NONE')
+  const [name, setName] = useState(() => (bill ? bill.name : (state?.name ?? '')))
+  const [amount, setAmount] = useState(() => (bill ? (bill.amountMinor / 100).toFixed(2) : ''))
+  const [due, setDue] = useState(() => (bill ? toInputValue(bill.dueAt) : ''))
+  const [recurrence, setRecurrence] = useState<Recurrence>(() => {
+    if (bill) return recurrenceOf(bill) === 'MONTHLY' ? 'MONTHLY' : 'NONE'
+    return state?.name ? 'MONTHLY' : 'NONE'
+  })
   const [confirmRemove, setConfirmRemove] = useState(false)
-
-  useEffect(() => {
-    if (!state) return
-    setConfirmRemove(false)
-    if (bill) {
-      setName(bill.name)
-      setAmount((bill.amountMinor / 100).toFixed(2))
-      setDue(toInputValue(bill.dueAt))
-      setRecurrence(recurrenceOf(bill) === 'MONTHLY' ? 'MONTHLY' : 'NONE')
-    } else {
-      setName(state.name ?? '')
-      setAmount('')
-      setDue('')
-      setRecurrence(state.name ? 'MONTHLY' : 'NONE')
-    }
-  }, [state]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const quickDates = useMemo(() => {
     const now = new Date()
@@ -420,125 +544,77 @@ function BillDrawer({
       { label: '1st of next month', value: at(new Date(now.getFullYear(), now.getMonth() + 1, 1)) },
       { label: 'Month end', value: at(new Date(now.getFullYear(), now.getMonth() + 1, 0)) },
     ]
-  }, [state]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
+  const copy = billDrawerCopy(bill)
   const amountMinor = parseMajorToMinor(amount) ?? 0
   const valid = name.trim().length > 0 && amountMinor > 0 && due !== ''
   const dueAt = due ? fromInputValue(due) : null
 
   return (
-    <Drawer open={state !== null} onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent className="max-h-[92dvh]">
-        <DrawerHeader className="pb-2">
-          <DrawerTitle>{bill ? 'Edit bill' : 'Add a bill'}</DrawerTitle>
-          <DrawerDescription>{bill ? 'Change anything, or remove it below.' : 'What do you owe, how much, and when?'}</DrawerDescription>
-        </DrawerHeader>
+    <>
+      <DrawerHeader className="pb-2">
+        <DrawerTitle>{copy.title}</DrawerTitle>
+        <DrawerDescription>{copy.description}</DrawerDescription>
+      </DrawerHeader>
 
-        <div className="space-y-5 overflow-y-auto px-4 pb-2">
-          <div className="flex items-baseline justify-center gap-1.5 py-1">
-            <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
-            <input
-              inputMode="decimal"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))}
-              placeholder="0"
-              aria-label="Amount"
-              className="w-52 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="bill-name">Name</Label>
-            <Input id="bill-name" className="h-11" value={name} placeholder="Apartment rent" onChange={(e) => setName(e.target.value)} />
-            {!bill && (
-              <div className="flex flex-wrap gap-2">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setName(s)}
-                    className={cn(
-                      'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs',
-                      name === s ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200' : 'border-border bg-card text-muted-foreground',
-                    )}
-                  >
-                    {billMeta(s).emoji} {s}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="bill-due">Due date</Label>
-            <div className="flex flex-wrap gap-2">
-              {quickDates.map((q) => (
-                <button
-                  key={q.label}
-                  type="button"
-                  onClick={() => setDue(q.value)}
-                  className={cn(
-                    'inline-flex h-8 items-center rounded-full border px-3 text-xs',
-                    due === q.value ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200' : 'border-border bg-card text-muted-foreground',
-                  )}
-                >
-                  {q.label}
-                </button>
-              ))}
-            </div>
-            <Input id="bill-due" type="date" className="h-11" value={due} onChange={(e) => setDue(e.target.value)} />
-            {dueAt != null && (
-              <p className="text-xs text-muted-foreground">
-                {longDate(dueAt)}, {dueInfo(dueAt).text.toLowerCase()}
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label>Repeats</Label>
-            <Segmented
-              options={[
-                { key: 'NONE', label: 'Just once' },
-                { key: 'MONTHLY', label: 'Every month' },
-              ]}
-              value={recurrence}
-              onChange={setRecurrence}
-            />
-            {recurrence === 'MONTHLY' && dueAt != null && (
-              <p className="text-xs text-muted-foreground">Repeats on the {ordinal(new Date(dueAt).getDate())} of each month.</p>
-            )}
-          </div>
-
-          {bill && (
-            <Button
-              variant="ghost"
-              className={cn('w-full', confirmRemove ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
-              disabled={pending}
-              onClick={() => (confirmRemove ? onRemove(bill) : setConfirmRemove(true))}
-            >
-              {confirmRemove ? 'Tap again to remove this bill' : 'Remove bill'}
-            </Button>
-          )}
+      <div className="space-y-5 overflow-y-auto px-4 pb-2">
+        <div className="flex items-baseline justify-center gap-1.5 py-1">
+          <span className="text-3xl font-medium text-muted-foreground">{currencySymbol}</span>
+          <input
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))}
+            placeholder="0"
+            aria-label="Amount"
+            className="w-52 bg-transparent text-center text-5xl font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
+          />
         </div>
 
-        <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <BillNameField name={name} onChange={setName} showSuggestions={!bill} />
+        <BillDueField due={due} dueAt={dueAt} quickDates={quickDates} onChange={setDue} />
+        <BillRecurrenceField recurrence={recurrence} dueAt={dueAt} onChange={setRecurrence} />
+
+        {bill && (
           <Button
-            className="h-12 text-base"
-            disabled={!valid || pending}
-            onClick={() =>
-              onSave(
-                { id: bill?.id, name: name.trim(), amountMinor, dueAt: dueAt!, recurrence },
-                bill ? 'Changes saved' : 'Bill added',
-                onClose,
-              )
-            }
+            variant="ghost"
+            className={cn('w-full', confirmRemove ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/20' : 'text-muted-foreground')}
+            disabled={pending}
+            onClick={() => (confirmRemove ? onRemove(bill) : setConfirmRemove(true))}
           >
-            {pending ? 'Saving…' : bill ? 'Save changes' : 'Add bill'}
+            {confirmRemove ? 'Tap again to remove this bill' : 'Remove bill'}
           </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-        </DrawerFooter>
+        )}
+      </div>
+
+      <BillDrawerFooter
+        valid={valid}
+        pending={pending}
+        saveLabel={copy.save}
+        onSave={() =>
+          onSave(
+            { id: bill?.id, name: name.trim(), amountMinor, dueAt: dueAt!, recurrence },
+            bill ? 'Changes saved' : 'Bill added',
+            onClose,
+          )
+        }
+        onClose={onClose}
+      />
+    </>
+  )
+}
+
+function BillDrawer(props: {
+  state: { bill: Commitment | null; name?: string } | null
+  onClose: () => void
+  onSave: (input: CommitmentInput, message: string, done: () => void) => void
+  onRemove: (bill: Commitment) => void
+  pending: boolean
+}) {
+  return (
+    <Drawer open={props.state !== null} onOpenChange={(open) => !open && props.onClose()}>
+      <DrawerContent className="max-h-[92dvh]">
+        <BillDrawerBody key={billDrawerKey(props.state)} {...props} />
       </DrawerContent>
     </Drawer>
   )
